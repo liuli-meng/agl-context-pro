@@ -56,16 +56,17 @@ async function poll(isManual) {
   if (polling) return;
   polling = true;
   try {
-    // 预算与对话两路并行；对话失败不影响预算显示
-    const [ctx, conv] = await Promise.all([
+    // 预算、对话、官方额度三路并行；单路失败不影响其余显示
+    const [ctx, conv, quota] = await Promise.all([
       lsclient.getContext(),
       lsclient.getConversation().catch(() => ({ ok: false, error: '' })),
+      lsclient.getUserStatus().catch(() => ({ ok: false, error: '' })),
     ]);
 
     if (ctx.ok) {
       lastDiscoverFail = 0;
-      render(ctx, conv.ok ? conv : null);
-      warnOnTruncation(ctx, conv.ok ? conv : null);
+      render(ctx, conv.ok ? conv : null, quota.ok ? quota : null);
+      warnOnTruncation(ctx, conv.ok && conv.conversation ? conv.conversation.cascadeId : null);
     } else {
       // 发现失败做节流，避免每个轮询周期都起一遍 PowerShell
       const now = Date.now();
@@ -81,7 +82,7 @@ async function poll(isManual) {
 
 // ---------------------------------------------------------------- 渲染
 
-function render(ctx, conv) {
+function render(ctx, conv, quota) {
   const dot = lsclient.statusDot(ctx.percent);
   const showConv = vscode.workspace.getConfiguration('aglContext')
     .get('showConversation', true);
@@ -130,6 +131,22 @@ function render(ctx, conv) {
     }
   }
 
+  if (quota && quota.models && quota.models.length) {
+    const withQuota = quota.models.filter((m) => m.resetTime || m.remainingPercent < 100);
+    const listed = (withQuota.length ? withQuota : quota.models)
+      .slice().sort((a, b) => a.remainingPercent - b.remainingPercent).slice(0, 4);
+    md.appendMarkdown('\n\n---\n\n**官方额度**（服务端视角）\n\n');
+    if (quota.plan) md.appendMarkdown(`套餐：${quota.plan}\n\n`);
+    for (const m of listed) {
+      const reset = m.resetTime && m.resetTime !== '1970-01-01T00:00:00Z'
+        ? ` · 重置 ${m.resetTime.slice(5, 16).replace('T', ' ')}` : '';
+      md.appendMarkdown(`- ${m.label}：**${m.remainingPercent}%** 剩余${reset}\n`);
+    }
+    if (quota.models.length > listed.length) {
+      md.appendMarkdown(`- …等 ${quota.models.length} 个模型（点击状态栏看全部）\n`);
+    }
+  }
+
   md.appendMarkdown(`\n\n_数据源 language_server · 端口 ${ctx.session.port} · 点击状态栏看逐项明细_`);
   statusItem.tooltip = md;
 }
@@ -142,9 +159,8 @@ function renderOffline(err) {
   statusItem.tooltip = md;
 }
 
-/** 截断告警：预算或对话从「未截断→截断」跳变时弹一次；新会话重置状态 */
-function warnOnTruncation(ctx, conv) {
-  const convId = conv && conv.conversation ? conv.conversation.cascadeId : null;
+/** 截断告警：预算从「未截断→截断」跳变时弹一次；新会话重置状态 */
+function warnOnTruncation(ctx, convId) {
   if (convId !== lastConvId) {
     lastConvId = convId;
     lastTruncated = false; // 换会话后允许重新告警
@@ -161,9 +177,10 @@ function warnOnTruncation(ctx, conv) {
 // ---------------------------------------------------------------- 明细弹层
 
 async function showDetail() {
-  const [ctx, conv] = await Promise.all([
+  const [ctx, conv, quota] = await Promise.all([
     lsclient.getContext(),
     lsclient.getConversation().catch(() => ({ ok: false, error: '' })),
+    lsclient.getUserStatus().catch(() => ({ ok: false, error: '' })),
   ]);
   if (!ctx.ok) {
     vscode.window.showInformationMessage('AGL：' + ctx.error);
@@ -193,6 +210,26 @@ async function showDetail() {
         label: `   $(history) ${o.summary}`,
         description: `${o.status} · ${o.stepCount} 步`,
         detail: o.lastModifiedTime,
+      });
+    }
+    items.push({ label: '', kind: vscode.QuickPickItemKind.Separator });
+  }
+
+  if (quota.ok && quota.models.length) {
+    items.push({
+      label: '$(gauge) 官方额度（服务端视角）',
+      description: quota.plan || '',
+      detail: quota.credits.length
+        ? '含 Google One AI Credits 等权益 · 剩余比例由平台下发'
+        : '剩余比例由平台下发',
+    });
+    for (const m of quota.models.slice().sort((a, b) => a.remainingPercent - b.remainingPercent)) {
+      const reset = m.resetTime && m.resetTime !== '1970-01-01T00:00:00Z'
+        ? m.resetTime.slice(0, 16).replace('T', ' ') : '未使用';
+      items.push({
+        label: `   ${m.isDefault ? '$(check) ' : ''}${m.label}`,
+        description: `${m.remainingPercent}% 剩余`,
+        detail: `重置于 ${reset}`,
       });
     }
     items.push({ label: '', kind: vscode.QuickPickItemKind.Separator });

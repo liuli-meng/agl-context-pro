@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.0 — 2026-10-01
+
+### 新增
+- **官方额度视图（GetUserStatus）**：状态栏 tooltip 与明细弹层展示服务端下发的每模型剩余比例与重置时间、套餐名（Google AI Pro/Ultra/Free）、Credits
+  - 数据与云端 `retrieveUserQuotaSummary` 同源，但由本地 LS 带凭据代理——扩展内零 OAuth、零云端请求
+  - 处理 proto3 float 0.0 缺省坑：remainingFraction 缺失时按 resetTime 判定（epoch → 满额，未来时间 → 已用尽）
+- 测试用例补齐（7 用例）
+
+### 调研来源
+- [Hhz0823/ZCode-Antigravity](https://github.com/Hhz0823/ZCode-Antigravity)（开源）：其 Windows 托盘的"5 小时/本周额度、重置时间"来自 Google 云端 quota 接口 + 自建网关 OAuth 代理；本项目改为走 LS 本地 `GetUserStatus` 等价实现
+- [AGI-is-going-to-arrive](https://github.com/AGI-is-going-to-arrive/Antigravity-Context-Window-Monitor) 的 `fetchFullUserStatus()` 验证了 `GetUserStatus` 响应结构与 proto3 缺省坑
+
 ## 0.2.0 — 2026-10-01
 
 ### 新增

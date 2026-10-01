@@ -363,6 +363,68 @@ async function getConversation() {
   };
 }
 
+// ---------------------------------------------------------------- 官方额度（GetUserStatus）
+
+/**
+ * 拉取官方额度视图：每模型剩余比例 + 重置时间 + 套餐 + Credits。
+ * 与 ZCode-Antigravity 走云端 retrieveUserQuotaSummary 同源同效，
+ * 但 LS 已带凭据代理，扩展内一个 RPC 即可，无需 OAuth / 网关。
+ * 返回 { ok, plan, credits, models, session }，失败 { ok:false, error }。
+ * models: [{ model, label, remainingPercent, resetTime, isDefault }]
+ */
+async function getUserStatus() {
+  let s = await getSession();
+  if (!s) return { ok: false, error: '未发现运行中的 language_server' };
+
+  const body = { metadata: { ideName: 'antigravity', extensionName: 'antigravity' } };
+  let raw;
+  try {
+    raw = await rpc(s.port, s.csrf, 'GetUserStatus', body, 10000);
+  } catch (e) {
+    session = null;
+    s = await discover();
+    if (!s) return { ok: false, error: 'LS 连接失效且重新发现失败' };
+    try {
+      raw = await rpc(s.port, s.csrf, 'GetUserStatus', body, 10000);
+    } catch (e2) {
+      return { ok: false, error: String(e2.message || e2) };
+    }
+  }
+
+  const us = (raw && raw.userStatus) || {};
+  const configs = (us.cascadeModelConfigData && us.cascadeModelConfigData.clientModelConfigs) || [];
+
+  // proto3 float 0.0 不序列化的坑：remainingFraction 缺失时，
+  // resetTime 是 epoch → 额度未动（满），是真实未来时间 → 已用尽（0）
+  const resolveFraction = (q) => {
+    if (!q) return 1;
+    if (q.remainingFraction != null) return q.remainingFraction;
+    const rt = q.resetTime || '';
+    return (!rt || rt === '1970-01-01T00:00:00Z') ? 1 : 0;
+  };
+
+  const models = configs.map((c) => ({
+    model: (c.modelOrAlias && c.modelOrAlias.model) || '',
+    label: c.label || '',
+    remainingPercent: Math.round(resolveFraction(c.quotaInfo) * 1000) / 10,
+    resetTime: (c.quotaInfo && c.quotaInfo.resetTime) || '',
+    isDefault: !!(us.cascadeModelConfigData && us.cascadeModelConfigData.defaultOverrideModelConfig
+      && us.cascadeModelConfigData.defaultOverrideModelConfig.modelOrAlias
+      && us.cascadeModelConfigData.defaultOverrideModelConfig.modelOrAlias.model === (c.modelOrAlias && c.modelOrAlias.model)),
+  })).filter((m) => m.model && m.label);
+
+  const planInfo = us.planStatus && us.planStatus.planInfo;
+  const credits = (us.userTier && us.userTier.availableCredits) || [];
+
+  return {
+    ok: true,
+    plan: (planInfo && (planInfo.displayName || planInfo.name)) || '',
+    credits,
+    models,
+    session: { port: s.port },
+  };
+}
+
 // ---------------------------------------------------------------- 展示格式化
 
 /** 1673 -> "1.7k"，20000 -> "20k" */
@@ -380,7 +442,7 @@ function statusDot(percent) {
 }
 
 module.exports = {
-  getContext, getConversation, discover, rpc,
+  getContext, getConversation, getUserStatus, discover, rpc,
   parseTrajectories, parseConversationSteps, guessContextLimit,
   fmtNum, statusDot, SERVICE,
 };

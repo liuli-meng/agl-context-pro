@@ -2,20 +2,20 @@
 
 [![CI](https://github.com/XiaoZuliang/agl-context-pro/actions/workflows/ci.yml/badge.svg)](https://github.com/XiaoZuliang/agl-context-pro/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.2.0-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.3.0-blue.svg)](CHANGELOG.md)
 
-Antigravity IDE 的上下文用量双监控扩展：状态栏同时显示 **① 预算占用** 和 **② 当前对话用量**，纯 Node 实现、零 npm 依赖、无编译步骤。
+Antigravity IDE 的上下文用量三重监控扩展：状态栏同时显示 **① 预算占用**、**② 当前对话用量** 和 **③ 官方额度**，纯 Node 实现、零 npm 依赖、无编译步骤。
 
 ## 它监控什么
 
-| | 预算（Budget） | 对话（Conversation） |
-|---|---|---|
-| 含义 | 自定义内容（Rules / Skills）吃掉多少注入预算 | 当前 cascade 会话实际消耗的 token |
-| 数据源 | `GetTokenBase` | `GetAllCascadeTrajectories` + `GetCascadeTrajectorySteps` |
-| 显示 | `1.7k/20k (8.4%)` | `82.1k/256k (32.1%)` |
-| 附加 | Rules / Skills 逐项拆解、截断告警 | 模型上限自动映射、压缩检测、会话列表 |
+| | 预算（Budget） | 对话（Conversation） | 官方额度（Quota） |
+|---|---|---|---|
+| 含义 | 自定义内容吃掉多少注入预算 | 当前 cascade 会话实际消耗 token | 服务端视角的模型剩余额度 |
+| 数据源 | `GetTokenBase` | `GetAllCascadeTrajectories` + `GetCascadeTrajectorySteps` | `GetUserStatus` |
+| 显示 | `1.7k/20k (8.4%)` | `82.1k/256k (32.1%)` | 每模型剩余 % + 重置时间 + 套餐 |
+| 附加 | Rules/Skills 逐项拆解、截断告警 | 模型上限映射、压缩检测、会话列表 | tooltip 汇总、明细逐模型 |
 
-两者的关系：预算是**每次请求固定注入的底噪**，对话是**随聊天增长的动态开销**。现有扩展只看后者，本扩展两个都看。
+三者的关系：预算是**每次请求固定注入的底噪**，对话是**随聊天增长的动态开销**，官方额度是**平台计费视角的剩余配额**（与云端接口同源，由本地 LS 带凭据代理）。
 
 ## 安装
 
@@ -78,8 +78,9 @@ openssl req -x509 -newkey rsa:2048 -keyout test/key.pem -out test/cert.pem \
 
 ## 致谢与出处
 
-- [AGI-is-going-to-arrive/Antigravity-Context-Window-Monitor](https://github.com/AGI-is-going-to-arrive/Antigravity-Context-Window-Monitor) —— 对话级监控的开创者，本扩展的 trajectory RPC 用法与压缩检测阈值（`COMPRESSION_MIN_DROP=5000`）逆向自其发行版代码，模型上限映射参考其 `models.js`。本项目与它是**互补关系**：它专精对话级深度分析（成本估算、模型名动态解析），本项目胜在零依赖、双监控和状态栏轻量展示。
-- `GetTokenBase` 预算接口为本项目独立发现（2026-09 实测），截至 v0.2.0 未见其他开源扩展使用。
+- [AGI-is-going-to-arrive/Antigravity-Context-Window-Monitor](https://github.com/AGI-is-going-to-arrive/Antigravity-Context-Window-Monitor) —— 对话级监控的开创者，本扩展的 trajectory RPC 用法与压缩检测阈值（`COMPRESSION_MIN_DROP=5000`）逆向自其发行版代码；`GetUserStatus` 的响应结构与 proto3 remainingFraction 缺省坑也来自其 `fetchFullUserStatus()`。
+- [Hhz0823/ZCode-Antigravity](https://github.com/Hhz0823/ZCode-Antigravity)（智谱 ZCode 生态，2026-09 开源）—— 其系统托盘的"5 小时/本周额度、重置时间"实现走了 Google 云端 `retrieveUserQuotaSummary` + 自建网关 OAuth；受此启发，本项目改用 LS 本地 `GetUserStatus` 拿同源数据，扩展内零凭据、零额外网络配置。
+- `GetTokenBase` 预算接口为本项目独立发现（2026-09 实测），截至 v0.3.0 未见其他开源扩展使用。
 
 ## 已知边界
 

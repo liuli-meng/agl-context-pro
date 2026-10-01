@@ -107,6 +107,24 @@ function test(name, fn) {
     assert.strictEqual(conv.others[0].cascadeId, 'conv-1-bbbb');
   });
 
+  await test('getUserStatus：官方额度 + proto3 缺省坑 + 套餐', async () => {
+    const st = await lsclient.getUserStatus();
+    assert.ok(st.ok);
+    assert.strictEqual(st.plan, 'Google AI Pro');
+    assert.strictEqual(st.models.length, 3);
+    const gemini = st.models.find((m) => m.model === 'gemini-3.8-flash-high');
+    // remainingFraction 缺失 + resetTime 未来 → 已用尽 0%
+    assert.strictEqual(gemini.remainingPercent, 0);
+    assert.strictEqual(gemini.resetTime, '2026-10-02T03:00:00Z');
+    assert.strictEqual(gemini.isDefault, true);
+    const claude = st.models.find((m) => m.model === 'claude-sonnet-4-6');
+    // remainingFraction 缺失 + epoch resetTime → 未动 100%
+    assert.strictEqual(claude.remainingPercent, 100);
+    const pro = st.models.find((m) => m.model === 'gemini-3.1-pro-low');
+    assert.strictEqual(pro.remainingPercent, 78.5);
+    assert.strictEqual(st.credits.length, 1);
+  });
+
   await test('格式化输出', () => {
     assert.strictEqual(lsclient.fmtNum(1673), '1.7k');
     assert.strictEqual(lsclient.fmtNum(20000), '20.0k');

@@ -93,6 +93,26 @@ const steps = [
   { type: 'CORTEX_STEP_TYPE_USER_INPUT', metadata: {} },
 ];
 
+// 官方额度视图（GetUserStatus）：含 proto3 float 0.0 缺省的两个边界场景
+// —— gemini-3.8 用尽（fraction 缺失 + resetTime 未来 → 0%）、claude 未动（fraction 缺失 + epoch → 100%）
+const userStatus = {
+  userStatus: {
+    cascadeModelConfigData: {
+      clientModelConfigs: [
+        { modelOrAlias: { model: 'gemini-3.8-flash-high' }, label: 'Gemini 3.8 Flash (High)',
+          quotaInfo: { resetTime: '2026-10-02T03:00:00Z' } },
+        { modelOrAlias: { model: 'claude-sonnet-4-6' }, label: 'Claude Sonnet 4.6 (Thinking)',
+          quotaInfo: { resetTime: '1970-01-01T00:00:00Z' } },
+        { modelOrAlias: { model: 'gemini-3.1-pro-low' }, label: 'Gemini 3.1 Pro (Low)',
+          quotaInfo: { remainingFraction: 0.785, resetTime: '2026-10-02T03:00:00Z' } },
+      ],
+      defaultOverrideModelConfig: { modelOrAlias: { model: 'gemini-3.8-flash-high' } },
+    },
+    planStatus: { planInfo: { displayName: 'Google AI Pro' } },
+    userTier: { availableCredits: [{ creditType: 'GOOGLE_ONE_AI', creditAmount: 5, minimumCreditAmountForUsage: 1 }] },
+  },
+};
+
 // ---- 服务器 ----------------------------------------------------------------
 
 function createMockLs() {
@@ -128,6 +148,9 @@ function createMockLs() {
           }
           case 'GetCascadeTrajectorySteps':
             payload = { steps };
+            break;
+          case 'GetUserStatus':
+            payload = userStatus;
             break;
           default:
             res.writeHead(404).end();
