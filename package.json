@@ -1,0 +1,63 @@
+{
+  "name": "agl-context-pro",
+  "displayName": "AGL 上下文监控",
+  "description": "Antigravity IDE 上下文用量双监控：① 预算占用（Rules/Skills 逐项拆解，GetTokenBase 独家接口）② 当前对话 token 用量（checkpoint 实测 + 模型上限映射 + 压缩检测）",
+  "version": "0.2.0",
+  "publisher": "xiaozuliang",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0",
+    "node": ">=18.0.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "extensionKind": [
+    "ui",
+    "workspace"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "aglContext.showDetail",
+        "title": "AGL: 查看上下文明细"
+      },
+      {
+        "command": "aglContext.refreshNow",
+        "title": "AGL: 立即刷新上下文用量"
+      }
+    ],
+    "configuration": {
+      "title": "AGL 上下文监控",
+      "properties": {
+        "aglContext.pollSeconds": {
+          "type": "number",
+          "default": 5,
+          "minimum": 2,
+          "description": "轮询间隔（秒）。预算 + 对话两路 RPC 各约 10-30ms，5 秒轮询开销可忽略。"
+        },
+        "aglContext.showConversation": {
+          "type": "boolean",
+          "default": true,
+          "description": "状态栏显示当前对话用量（关闭后只显示上下文预算）。"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "test": "node test/run-tests.js",
+    "package": "python build.py"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/XiaoZuliang/agl-context-pro"
+  },
+  "homepage": "https://github.com/XiaoZuliang/agl-context-pro",
+  "bugs": {
+    "url": "https://github.com/XiaoZuliang/agl-context-pro/issues"
+  }
+}

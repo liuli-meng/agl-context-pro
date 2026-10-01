@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: 语法检查
+        run: |
+          node --check extension.js
+          node --check lsclient.js
+          node --check test/mock-ls.js
+          node --check test/run-tests.js
+
+      - name: 生成测试用自签证书
+        run: |
+          openssl req -x509 -newkey rsa:2048 \
+            -keyout test/key.pem -out test/cert.pem \
+            -days 3650 -nodes -subj "/CN=localhost"
+
+      - name: 运行测试
+        run: npm test
+
+      - name: 打包 VSIX
+        run: python build.py
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vsix
+          path: releases/*.vsix

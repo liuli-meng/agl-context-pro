@@ -1,0 +1,11 @@
+# 依赖与产物
+node_modules/
+*.vsix
+releases/*.vsix
+
+# 测试自签证书（本地生成，不入库；生成命令见 README）
+test/*.pem
+
+# 系统垃圾
+Thumbs.db
+.DS_Store
