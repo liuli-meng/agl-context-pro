@@ -1,6 +1,6 @@
 # AGL Context Pro
 
-[![CI](https://github.com/XiaoZuliang/agl-context-pro/actions/workflows/ci.yml/badge.svg)](https://github.com/XiaoZuliang/agl-context-pro/actions/workflows/ci.yml)
+[![CI](https://github.com/liuli-meng/agl-context-pro/actions/workflows/ci.yml/badge.svg)](https://github.com/liuli-meng/agl-context-pro/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Version](https://img.shields.io/badge/version-0.3.0-blue.svg)](CHANGELOG.md)
 
@@ -19,7 +19,7 @@ Antigravity IDE 的上下文用量三重监控扩展：状态栏同时显示 **�
 
 ## 安装
 
-从 [Releases](https://github.com/XiaoZuliang/agl-context-pro/releases) 下载 `.vsix`，然后在 Antigravity IDE 里：
+从 [Releases](https://github.com/liuli-meng/agl-context-pro/releases) 下载 `.vsix`，然后在 Antigravity IDE 里：
 
 - 界面安装：`Ctrl+Shift+X` → 扩展面板右上角 `…` → **从 VSIX 安装**
 - 或命令行安装（见 [docs/install-cli.md](docs/install-cli.md)，Antigravity 的 CLI 装扩展需要一点小技巧）

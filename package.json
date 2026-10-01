@@ -54,10 +54,10 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/XiaoZuliang/agl-context-pro"
+    "url": "https://github.com/liuli-meng/agl-context-pro"
   },
-  "homepage": "https://github.com/XiaoZuliang/agl-context-pro",
+  "homepage": "https://github.com/liuli-meng/agl-context-pro",
   "bugs": {
-    "url": "https://github.com/XiaoZuliang/agl-context-pro/issues"
+    "url": "https://github.com/liuli-meng/agl-context-pro/issues"
   }
 }
