@@ -9,3 +9,8 @@ test/*.pem
 # 系统垃圾
 Thumbs.db
 .DS_Store
+
+# 托盘版运行时产物
+tray/__pycache__/
+tray/last_reading.json
+tray/tray_error.log
