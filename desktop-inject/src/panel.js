@@ -92,18 +92,93 @@
 
   // ---------------------------------------------------------------- CSRF
   /*
-   * ⚠ 关键：LS 要求每个请求带 CSRF token，否则 401 {"code":"unauthenticated"}。
+   * ⚠ 关键：LS 要求每个请求带 CSRF token，否则 401 {"code":"unauthenticated","message":"missing CSRF token"}。
    *
-   * 首选来源：页面在启动时会把 token 挂到全局 ——
-   *     window.__APP_CONFIG__ = { productName, csrfToken, appVersion, ... }
-   * 直接读就行，不需要嗅探。
+   * ⚠⚠ 本机实测（2026-10-02，Antigravity 2.19.1）—— 这里是最大的坑：
+   *     Antigravity 开了 contextIsolation。preload 跑在 **Electron Isolated Context** 里，
+   *     而 token 挂在 **主世界** 的 window.__APP_CONFIG__.csrfToken 上。
+   *     隔离世界有共享 DOM、有 fetch，但 **看不到主世界的任何 window 属性** ——
+   *     实测：主世界 csrfLen=36，隔离世界 NO_CONFIG；document.cookie 为空；localStorage 里也没有。
+   *     于是「直接读全局」必然拿不到，而 hook 自己世界的 fetch/XHR 也嗅不到
+   *     （页面的真实请求发生在主世界，hook 不到）→ 永远 401 → 面板卡在「数据获取中…」。
    *
-   * 兜底：万一某版本没挂全局，就 hook fetch / XHR 从真实请求头里嗅探。
-   * token 在应用生命周期内不变（每次启动应用才重新生成）。
+   * 解法：**往主世界注入一个 <script>，让它把 token 写回 DOM**（DOM 是两个世界共享的）。
+   *   主世界 script 读 __APP_CONFIG__.csrfToken → 写到 <html data-agl-csrf> → 隔离世界读取。
+   *   三级兜底：① 主世界 script 桥 ② 直读全局（万一没开隔离）③ hook fetch/XHR。
    */
   var CSRF = '';
+  var CSRF_ATTR = 'data-agl-csrf';
+  var CSRF_BRIDGE_ID = 'agl-csrf-bridge';
 
-  /** 从全局 __APP_CONFIG__ 直接取（最稳） */
+  /** 兜底 1：读共享 DOM 上的桥接属性 */
+  function readCsrfFromDom() {
+    try {
+      var v = document.documentElement.getAttribute(CSRF_ATTR);
+      if (v) return String(v);
+      var el = document.getElementById(CSRF_BRIDGE_ID);
+      if (el) {
+        var t = el.getAttribute('data-token') || el.textContent;
+        if (t) return String(t).trim();
+      }
+    } catch (e) { /* ignore */ }
+    return '';
+  }
+
+  /**
+   * 主世界桥：注入 <script> 到主世界执行。
+   * CSP 若禁止 inline script 会自动失败，此时静默降级（不会抛到外面）。
+   */
+  function installMainWorldBridge() {
+    try {
+      if (document.getElementById(CSRF_BRIDGE_ID)) return;
+
+      var code = '(function(){'
+        // 1) 直接读全局
+        + 'function grab(){'
+        + '  try{var c=window.__APP_CONFIG__;'
+        + '    if(c){if(typeof c==="string"){try{c=JSON.parse(c)}catch(e){}}'
+        + '      var t=c.csrfToken||c.csrf_token||c.CSRF_TOKEN;if(t)return String(t);}}catch(e){}'
+        + '  var sp=["__NEXT_DATA__","__INITIAL_STATE__","__APP__","__CONFIG__"];'
+        + '  for(var i=0;i<sp.length;i++){try{var o=window[sp[i]];if(!o)continue;'
+        + '    if(o.csrfToken)return String(o.csrfToken);'
+        + '    var j=JSON.stringify(o);var m=j&&j.match(/"csrf_?token"\\s*:\\s*"([^"]+)"/i);'
+        + '    if(m)return m[1];}catch(e){}}'
+        + '  return "";'
+        + '}'
+        // 2) 写回共享 DOM
+        + 'function put(t){try{document.documentElement.setAttribute("' + CSRF_ATTR + '",t);}catch(e){}'
+        + '  try{var d=document.getElementById("' + CSRF_BRIDGE_ID + '");if(!d){'
+        + '    d=document.createElement("meta");d.id="' + CSRF_BRIDGE_ID + '";'
+        + '    (document.head||document.documentElement).appendChild(d);}'
+        + '    d.setAttribute("data-token",t);}catch(e){}}'
+        // 3) hook 主世界 fetch/XHR —— 页面自己请求时顺手把真 token 抓出来
+        + 'function hook(){'
+        + '  try{var f=window.fetch;if(f&&!f.__aglB){'
+        + '    var w=function(i,init){try{var h=(init&&init.headers)||(i&&i.headers);var t="";'
+        + '      if(h){if(typeof h.get==="function"){t=h.get("X-Codeium-Csrf-Token")||h.get("x-codeium-csrf-token")||"";}'
+        + '        else{for(var k in h){if(/csrf/i.test(k)&&typeof h[k]==="string"){t=h[k];break;}}}}'
+        + '      if(t)put(t);}catch(e){}return f.apply(this,arguments);};'
+        + '    w.__aglB=1;window.fetch=w;}}catch(e){}'
+        + '  try{var s=XMLHttpRequest.prototype.setRequestHeader;if(s&&!s.__aglB){'
+        + '    var n=function(k,v){try{if(/csrf/i.test(k)&&typeof v==="string")put(v);}catch(e){}'
+        + '      return s.apply(this,arguments);};n.__aglB=1;XMLHttpRequest.prototype.setRequestHeader=n;}}catch(e){}'
+        + '}'
+        // 4) 立即抓一次 + 短轮询 + 装 hook
+        + 'var t0=grab();if(t0)put(t0);'
+        + 'try{hook();}catch(e){}'
+        + 'var n=0;var iv=setInterval(function(){n++;var t=grab();if(t)put(t);'
+        + '  if(t||n>40)clearInterval(iv);},250);'
+        + '})();';
+
+      var s = document.createElement('script');
+      s.id = CSRF_BRIDGE_ID + '-src';
+      s.textContent = code;
+      (document.head || document.documentElement).appendChild(s);
+      s.remove();   // 执行完即移除，不留痕
+    } catch (e) { /* CSP 拒绝则降级 */ }
+  }
+
+  /** 兜底 2：直读全局（未开 contextIsolation 时可用） */
   function readCsrfFromGlobal() {
     try {
       var cfg = window.__APP_CONFIG__;
@@ -130,8 +205,15 @@
     return '';
   }
 
+  /** 统一取 token：DOM 桥 → 全局 → hook */
+  function readCsrf() {
+    return readCsrfFromDom() || readCsrfFromGlobal();
+  }
+
   function sniffCsrf() {
-    var direct = readCsrfFromGlobal();
+    installMainWorldBridge();
+
+    var direct = readCsrf();
     if (direct) CSRF = direct;
 
     var HEADERS = ['x-codeium-csrf-token', 'x-csrf-token', 'csrf-token', 'x-xsrf-token'];
@@ -153,7 +235,7 @@
       return '';
     }
 
-    // 1) hook fetch
+    // 3) hook fetch（本世界的，一般抓不到页面请求，但留着无害）
     var _fetch = window.fetch;
     if (_fetch && !_fetch.__aglHooked) {
       var wrapped = function (input, init) {
@@ -167,7 +249,7 @@
       window.fetch = wrapped;
     }
 
-    // 2) hook XHR（页面有些调用走 XHR）
+    // 4) hook XHR（同上）
     try {
       var _setH = XMLHttpRequest.prototype.setRequestHeader;
       if (!_setH.__aglHooked) {
@@ -183,7 +265,7 @@
 
   function rpc(method, body) {
     return new Promise(function (resolve, reject) {
-      if (!CSRF) CSRF = readCsrfFromGlobal();   // 每轮兜一次，防首页加载时未就绪
+      if (!CSRF) CSRF = readCsrf();   // 每轮兜一次，防首页加载时未就绪
       var ctrl = new AbortController();
       var to = setTimeout(function () { ctrl.abort(); }, CFG.RPC_TIMEOUT);
       var headers = { 'Content-Type': 'application/json' };
@@ -726,8 +808,13 @@
 
     var rows = '';
     if (!CONV.ok) {
+      // ⚠ 别只说「数据获取中」，把真实原因露出来，否则排查全靠猜
+      var why = '数据获取中…';
+      if (CONV.err === 'no session') why = '还没有对话';
+      else if (!CSRF) why = '拿不到 CSRF（隔离世界？）';
+      else if (CONV.err) why = '出错：' + CONV.err;
       rows = '<div class="agl-row"><span class="l" style="color:var(--agl-text-faint)">'
-        + (CONV.err === 'no session' ? '还没有对话' : '数据获取中…') + '</span></div>';
+        + esc(why) + '</span></div>';
     } else if (CONV.hasCkpt) {
       rows = row('历史上下文（缓存命中）', CONV.cacheRead, C.conv)
         + row('本轮新增输入', Math.max(0, CONV.input - CONV.cacheRead), C.sys)
@@ -753,8 +840,9 @@
         + '<div class="r"><span class="t">' + esc(nameOf(CONV.model))
         + '</span><span class="t num" style="margin-left:auto">' + CONV.steps + ' 步</span></div>';
     } else {
-      foot = '<div class="r"><span class="t">'
-        + (CONV.err === 'no session' ? '开启对话后自动统计' : '等待 Antigravity 响应…')
+      var footMsg = CONV.err === 'no session' ? '开启对话后自动统计'
+        : (!CSRF ? '未取到 CSRF token' : (CONV.err ? CONV.err : '等待 Antigravity 响应…'));
+      foot = '<div class="r"><span class="t">' + esc(footMsg)
         + '</span></div>';
     }
 
@@ -789,9 +877,10 @@
 
   function waitCsrfAndRefresh(tries) {
     tries = tries || 0;
-    if (!CSRF) CSRF = readCsrfFromGlobal();
-    if (CSRF || tries > 10) { refresh(); return; }
-    setTimeout(function () { waitCsrfAndRefresh(tries + 1); }, 400);
+    if (!CSRF) CSRF = readCsrf();
+    // 主世界桥是异步注入的（<script> 需要一拍才执行），多给几轮
+    if (CSRF || tries > 25) { refresh(); return; }
+    setTimeout(function () { waitCsrfAndRefresh(tries + 1); }, 300);
   }
 
   window.__AGL_CTX_PANEL__ = { refresh: refresh };
