@@ -71,7 +71,7 @@ python agl_ls.py --no-reuse :: 不复用，强制自己起一个实例
 
 分组         项目                                    tokens
 Rules      （小计）                                     182
-Rules      C:\Users\<user>\.gemini\config\GEMINI.md        182
+Rules      %USERPROFILE%\.gemini\config\GEMINI.md       182
 Skills     （小计）                                    1491
 Skills     modern-web-guidance                          364
 Skills     chrome-extensions                            325
