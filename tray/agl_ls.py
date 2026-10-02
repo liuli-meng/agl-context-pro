@@ -388,6 +388,182 @@ def fetch_user_status(ls_path=None, timeout=60, reuse=True):
         return ls.json('GetUserStatus')
 
 
+# ---------------------------------------------------------------- 对话用量
+
+# 模型 → 上下文窗口上限（2026-10-02 按本机 LS 实际返回的模型表整理）
+# 取自 GetCascadeModelConfigData 的 modelOrAlias.model
+_MODEL_LIMITS = {
+    # Claude 系（Anthropic 200k 窗口，Antigravity 侧按 160k 计）
+    'M35': 160000,   # Claude Sonnet 4.6 (Thinking)
+    'M26': 160000,   # Claude Opus 4.6 (Thinking)
+    # Gemini Pro 系
+    'M16': 128000,   # Gemini 3.1 Pro (High)
+    'M36': 128000,   # Gemini 3.1 Pro (Low)
+    'M18': 128000,
+    'M37': 128000,
+    # Gemini Flash 系（3.5+ 为 256k）
+    'M318': 256000,  # Gemini 3.8 Flash (High)
+    'M319': 256000,  # Gemini 3.8 Flash (Medium)
+    'M320': 256000,  # Gemini 3.8 Flash (Low)
+    'M298': 256000,  # Gemini 3.7 Flash (High)
+    'M299': 256000,
+    'M300': 256000,
+    'M71': 256000,   # Gemini 3.6 Flash (High)
+    'M72': 256000,
+    'M73': 256000,
+}
+
+
+def guess_context_limit(model_id):
+    """按模型 id 猜上下文窗口上限。"""
+    import re as _re
+    mid = str(model_id or '').upper()
+    m = _re.search(r'MODEL_PLACEHOLDER_([A-Z]\d+)', mid)
+    if m and m.group(1) in _MODEL_LIMITS:
+        return _MODEL_LIMITS[m.group(1)]
+    low = str(model_id or '').lower()
+    if 'claude' in low or 'opus' in low or 'sonnet' in low:
+        return 160000
+    if 'flash' in low or 'lite' in low or 'unspecified' in low:
+        vm = _re.search(r'(\d+\.\d+)', low)
+        ver = float(vm.group(1)) if vm else 0
+        return 128000 if (ver and ver < 3.5) else 256000
+    if 'gpt' in low or 'oss' in low:
+        return 80000
+    if 'pro' in low:
+        return 128000
+    # 兜底：M 编号按 Flash 系算
+    return 256000
+
+
+_STEP_CHECKPOINT = 'CORTEX_STEP_TYPE_CHECKPOINT'
+# modelUsage 实际挂在模型应答步上（不是 checkpoint）
+_STEP_WITH_USAGE = ('CORTEX_STEP_TYPE_PLANNER_RESPONSE', 'CORTEX_STEP_TYPE_CHECKPOINT')
+
+
+class ConversationUsage:
+    """当前会话的对话用量（来自 cascade trajectory）。
+
+    口径说明（2026-10-02 实测修正）：
+      - modelUsage 挂在 PLANNER_RESPONSE 步的 metadata 上
+      - 真实上下文规模 = inputTokens + cacheReadTokens
+        （inputTokens 只是本次新增，cacheReadTokens 是被缓存的历史上下文）
+    """
+
+    def __init__(self, raw=None):
+        self.raw = raw or {}
+        self.ok = False
+        self.error = None
+        self.summary = ''
+        self.model = ''
+        self.input_tokens = 0
+        self.cache_read_tokens = 0
+        self.output_tokens = 0
+        self.tool_output_tokens = 0
+        self.limit = 0
+        self.step_count = 0
+        self.compressed = False
+
+    @property
+    def used(self):
+        """真实上下文占用 = 新增输入 + 缓存读取。"""
+        return self.input_tokens + self.cache_read_tokens
+
+    @property
+    def percent(self):
+        return (100.0 * self.used / self.limit) if self.limit else 0.0
+
+    def parse(self, steps, summary='', model='', step_count=0):
+        prev_total = -1
+        last = None
+        for step in (steps or []):
+            typ = step.get('type', '')
+            meta = step.get('metadata') or {}
+            if typ in _STEP_WITH_USAGE:
+                mu = meta.get('modelUsage')
+                if mu:
+                    try:
+                        it = int(str(mu.get('inputTokens') or '0') or 0)
+                    except Exception:
+                        it = 0
+                    try:
+                        cr = int(str(mu.get('cacheReadTokens') or '0') or 0)
+                    except Exception:
+                        cr = 0
+                    try:
+                        ot = int(str(mu.get('outputTokens') or '0') or 0)
+                    except Exception:
+                        ot = 0
+                    total = it + cr
+                    # 压缩检测：上下文总量骤降
+                    if prev_total > 0 and total < prev_total and (prev_total - total) > 20000:
+                        self.compressed = True
+                    prev_total = total
+                    last = (it, cr, ot, mu.get('model') or '')
+            elif meta.get('toolCallOutputTokens'):
+                try:
+                    self.tool_output_tokens += int(meta['toolCallOutputTokens'])
+                except Exception:
+                    pass
+        if last:
+            self.input_tokens, self.cache_read_tokens, self.output_tokens, m = last
+            self.model = m or model
+        self.summary = summary
+        self.step_count = step_count
+        if not self.model:
+            self.model = model
+        self.limit = guess_context_limit(self.model)
+        self.ok = True
+        return self
+
+
+def fetch_conversation(ls_path=None, timeout=60, reuse=True, tail=400):
+    """拉当前会话的对话用量。
+
+    链路（与 agl-context-pro 扩展版一致）：
+      GetAllCascadeTrajectories → 取最近会话 → GetCascadeTrajectorySteps
+    注意：GetAllCascadeTrajectories 请求体必须带 metadata，否则返回空。
+    """
+    conv = ConversationUsage()
+    try:
+        with LanguageServer(ls_path=ls_path, startup_timeout=timeout,
+                            reuse=reuse) as ls:
+            conv.reused = ls.reused
+            data = ls.json('GetAllCascadeTrajectories',
+                           {'metadata': {'ideName': 'antigravity',
+                                         'extensionName': 'antigravity'}},
+                           timeout=20)
+            summaries = (data or {}).get('trajectorySummaries') or {}
+            if not summaries:
+                conv.error = '未发现会话（Antigravity 未运行或尚无对话）'
+                return conv
+            # 按最后修改时间取最近一条
+            items = sorted(summaries.items(),
+                           key=lambda kv: (kv[1] or {}).get('lastModifiedTime', ''),
+                           reverse=True)
+            cid, meta = items[0]
+            step_count = int((meta or {}).get('stepCount') or 0)
+            summary = (meta or {}).get('summary') or cid
+            model = ''
+            for key in ('latestTaskBoundaryStep', 'latestNotifyUserStep'):
+                latest = (meta or {}).get(key) or {}
+                m = (latest.get('step') or {}).get('metadata') or {}
+                if m.get('generatorModel'):
+                    model = m['generatorModel']
+                rq = m.get('requestedModel') or {}
+                if rq.get('model'):
+                    model = rq['model']
+            start = max(0, step_count - tail)
+            steps_resp = ls.json('GetCascadeTrajectorySteps',
+                                 {'cascadeId': cid, 'startIndex': start,
+                                  'endIndex': step_count}, timeout=25)
+            conv.parse((steps_resp or {}).get('steps') or [],
+                       summary=summary, model=model, step_count=step_count)
+    except Exception as e:
+        conv.error = str(e)
+    return conv
+
+
 # ---------------------------------------------------------------- CLI
 
 if __name__ == '__main__':

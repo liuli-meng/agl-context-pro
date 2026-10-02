@@ -1,9 +1,9 @@
 @echo off
 rem ============================================================
-rem  开机自启配置
+rem  开机自启配置（需要带 tkinter 的系统 Python 3.12）
 rem ============================================================
 setlocal
-set "PY=C:\Users\灵梦\.workbuddy\binaries\python\envs\default\Scripts\python.exe"
+set "PY=C:\Program Files\Python312\python.exe"
 
 if not exist "%PY%" (
     echo [错误] 找不到 Python 解释器：%PY%

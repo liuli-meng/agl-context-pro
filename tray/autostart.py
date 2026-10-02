@@ -9,7 +9,8 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 TRAY = os.path.join(HERE, 'tray.py')
-PYW = r'C:\Users\<user>\.workbuddy\binaries\python\envs\default\Scripts\pythonw.exe'
+# 用系统 Python 3.12：卡片式 UI 需要 tkinter，WorkBuddy 的 venv 里没有 tkinter
+PYW = r'C:\Program Files\Python312\pythonw.exe'
 LNK_NAME = 'Antigravity上下文监控.lnk'
 
 
