@@ -85,19 +85,124 @@
   }
 
   // ---------------------------------------------------------------- RPC
+  // ---------------------------------------------------------------- CSRF
+  /*
+   * ⚠ 关键：LS 要求每个请求带 CSRF token，否则 401 {"code":"unauthenticated"}。
+   *
+   * 首选来源：页面在启动时会把 token 挂到全局 ——
+   *     window.__APP_CONFIG__ = { productName, csrfToken, appVersion, ... }
+   * 直接读就行，不需要嗅探。
+   *
+   * 兜底：万一某版本没挂全局，就 hook fetch / XHR 从真实请求头里嗅探。
+   * token 在应用生命周期内不变（每次启动应用才重新生成）。
+   */
+  var CSRF = '';
+
+  /** 从全局 __APP_CONFIG__ 直接取（最稳） */
+  function readCsrfFromGlobal() {
+    try {
+      var cfg = window.__APP_CONFIG__;
+      if (cfg) {
+        if (typeof cfg === 'string') {          // 万一是 JSON 串
+          try { cfg = JSON.parse(cfg); } catch (e) { return ''; }
+        }
+        var t = cfg.csrfToken || cfg.csrf_token || cfg.CSRF_TOKEN;
+        if (t) return String(t);
+      }
+    } catch (e) { /* ignore */ }
+    // 再顺手扫一遍常见挂点
+    var spots = ['__NEXT_DATA__', '__INITIAL_STATE__', '__APP__', '__CONFIG__'];
+    for (var i = 0; i < spots.length; i++) {
+      try {
+        var o = window[spots[i]];
+        if (!o) continue;
+        if (o.csrfToken) return String(o.csrfToken);
+        var j = JSON.stringify(o);
+        var m = j && j.match(/"csrf_token"\s*:\s*"([^"]+)"/i);
+        if (m) return m[1];
+      } catch (e) { /* ignore */ }
+    }
+    return '';
+  }
+
+  function sniffCsrf() {
+    // 1) 先直接读全局
+    var direct = readCsrfFromGlobal();
+    if (direct) CSRF = direct;
+
+    var HEADERS = ['x-codeium-csrf-token', 'x-csrf-token', 'csrf-token', 'x-xsrf-token'];
+
+    function pick(src) {
+      if (!src) return '';
+      try {
+        if (typeof src.forEach === 'function' && typeof src.get === 'function') {
+          // Headers 实例
+          for (var i = 0; i < HEADERS.length; i++) {
+            var v = src.get(HEADERS[i]);
+            if (v) return v;
+          }
+          return '';
+        }
+        for (var k in src) {
+          if (/csrf/i.test(k) && typeof src[k] === 'string') return src[k];
+        }
+      } catch (e) { /* ignore */ }
+      return '';
+    }
+
+    // 1) hook fetch
+    var _fetch = window.fetch;
+    if (_fetch && !_fetch.__aglHooked) {
+      var wrapped = function (input, init) {
+        try {
+          var hit = pick(init && init.headers) || pick(input && input.headers);
+          if (hit) CSRF = hit;
+        } catch (e) { /* ignore */ }
+        return _fetch.apply(this, arguments);
+      };
+      wrapped.__aglHooked = true;
+      window.fetch = wrapped;
+    }
+
+    // 2) hook XHR（页面有些调用走 XHR）
+    try {
+      var _open = XMLHttpRequest.prototype.open;
+      var _setH = XMLHttpRequest.prototype.setRequestHeader;
+      if (!_setH.__aglHooked) {
+        var newSet = function (k, v) {
+          try { if (/csrf/i.test(k) && typeof v === 'string') CSRF = v; } catch (e) { /* ignore */ }
+          return _setH.apply(this, arguments);
+        };
+        newSet.__aglHooked = true;
+        XMLHttpRequest.prototype.setRequestHeader = newSet;
+      }
+    } catch (e) { /* ignore */ }
+  }
+
+  /** 拿不到 token 时，从内存里的已知位置兜底捞一遍 */
   function rpc(method, body) {
     return new Promise(function (resolve, reject) {
+      if (!CSRF) CSRF = readCsrfFromGlobal();   // 每轮兜一次，防首页加载时未就绪
       var ctrl = new AbortController();
       var to = setTimeout(function () { ctrl.abort(); }, CFG.RPC_TIMEOUT);
+      var headers = { 'Content-Type': 'application/json' };
+      if (CSRF) {
+        headers['X-Codeium-Csrf-Token'] = CSRF;
+        headers['Connect-Protocol-Version'] = '1';
+      }
       fetch(CFG.API + method, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: headers,
         body: JSON.stringify(body || {}),
         credentials: 'same-origin',
         signal: ctrl.signal,
       }).then(function (r) {
         clearTimeout(to);
-        if (!r.ok) { reject(new Error(method + ' HTTP ' + r.status)); return; }
+        if (!r.ok) {
+          if (r.status === 401) CSRF = '';   // token 失效 → 下一轮重新嗅探
+          reject(new Error(method + ' HTTP ' + r.status));
+          return;
+        }
         return r.text();
       }).then(function (t) {
         if (t === undefined) return;
@@ -110,22 +215,28 @@
   // ---------------------------------------------------------------- 取数
   var BUDGET = { groups: [], total: 0, budget: 0, remaining: 0, truncated: false };
   var CONV = {
-    ok: false, used: 0, limit: 0, input: 0, output: 0, est: 0,
+    ok: false, used: 0, limit: 0, input: 0, cacheRead: 0, output: 0, est: 0,
     model: '', summary: '', steps: 0, compressed: false, src: 'estimate',
   };
   var LABELS = {};   // model -> 官方 label（动态拉取）
   var TRACKED_CID = '';  // 当前跟踪的会话 id（跨轮询保持，防抖）
 
-  // —— 算法常量，对齐开源实现（AGI-is-going-to-arrive / daluoxiaojun 的 win 版）——
-  var SYS_PROMPT_OVERHEAD = 10000;   // 系统提示词固定开销
+  // —— 算法常量 ——
+  // ⚠ 真实数据实测（2026-10-02，Antigravity 2.19.1）：
+  //   · modelUsage 挂在 CORTEX_STEP_TYPE_PLANNER_RESPONSE 上（该会话 241 步、119 个 usage、零个 CHECKPOINT）
+  //     但别的版本挂在 CHECKPOINT 上 —— 两个都要认
+  //   · inputTokens 只是「本轮未命中缓存的增量」（实测 2721）
+  //     真正的上下文在 cacheReadTokens（实测 191639）
+  //     → 真实上下文 ≈ inputTokens + cacheReadTokens（+ 本轮 outputTokens）
+  var SYS_PROMPT_OVERHEAD = 10000;   // 完全无 usage 时的系统提示词兜底
   var USER_INPUT_FALLBACK = 500;
   var PLANNER_FALLBACK = 800;
-  var COMPRESS_MIN_DROP = 5000;      // checkpoint inputTokens 骤降阈值
+  var COMPRESS_MIN_DROP = 5000;      // 相邻 usage 上下文骤降阈值（压缩检测）
   var MAX_STEPS = 2000;              // 拉取上限，防爆
   var BATCH = 50, CONCURRENCY = 5;
 
   /**
-   * 字符估算 token（开源同款公式）：
+   * 字符估算 token（无 usage 时的兜底）：
    *   ascii 字符 / 4  +  非 ascii 字符 / 1.5
    */
   function estimateTokensFromText(text) {
@@ -137,19 +248,31 @@
     return Math.ceil(ascii / 4 + nonAscii / 1.5);
   }
 
+  /** 一个 step 上拿到的「上下文总量」= input + cacheRead（+ 本轮 output） */
+  function usageOf(mu) {
+    if (!mu) return null;
+    var it = parseFloat(mu.inputTokens) || 0;
+    var cr = parseFloat(mu.cacheReadTokens) || 0;
+    var ot = parseFloat(mu.outputTokens) || 0;
+    if (it <= 0 && cr <= 0 && ot <= 0) return null;
+    return { input: it, cacheRead: cr, output: ot, ctx: it + cr + ot, model: mu.model || '' };
+  }
+
   /**
-   * 从 steps 里算真实上下文用量（开源同款）：
-   *   contextUsed = 末个 CHECKPOINT 的 inputTokens + outputTokens
-   *                 + 该 checkpoint 之后的 toolCall 输出 + 字符估算
-   *   ⚠ 不用 cacheReadTokens —— 那是缓存命中量，加进去会虚高。
+   * 从 steps 里算真实上下文用量（实测口径）：
+   *
+   *   1) 取**最后一个带 modelUsage 的步**，上下文 = inputTokens + cacheReadTokens + outputTokens
+   *      （不逐轮累加 —— inputTokens 已经是累计前缀，累加会爆炸）
+   *   2) 该步之后的 toolCall 输出 + 字符估算，作为增量补上
+   *   3) 一个 usage 都没有才退回「系统提示词 + 工具输出估算」
    */
   function computeUsageFromSteps(steps, initialModel) {
-    var totalToolOut = 0;
-    var estOverhead = 0;
-    var outSinceCkpt = 0;
-    var ckptIn, ckptOut = 0;
+    var totalToolOut = 0;          // 全程工具输出（兜底用）
+    var estOverhead = 0;           // 最近一个 usage 之后的字符估算增量
+    var toolSinceUsage = 0;        // 最近一个 usage 之后的工具输出
     var model = initialModel || '';
-    var prevCkptIn = -1;
+    var last = null;               // 最后一个有效 usage
+    var prevCtx = -1;
     var compressed = false;
 
     for (var i = 0; i < steps.length; i++) {
@@ -159,9 +282,8 @@
 
       if (ty === 'CORTEX_STEP_TYPE_USER_INPUT') {
         var ui = step.userInput;
-        var txt = (ui && typeof ui === 'object') ? String(ui.userResponse || '') : '';
         estOverhead += (ui && typeof ui === 'object')
-          ? estimateTokensFromText(txt) : USER_INPUT_FALLBACK;
+          ? estimateTokensFromText(String(ui.userResponse || '')) : USER_INPUT_FALLBACK;
       }
 
       if (ty === 'CORTEX_STEP_TYPE_PLANNER_RESPONSE') {
@@ -183,43 +305,41 @@
 
       var tco = parseFloat(md.toolCallOutputTokens) || 0;
       totalToolOut += tco;
-      outSinceCkpt += tco;
+      toolSinceUsage += tco;
 
       if (md.generatorModel) model = md.generatorModel;
       if (md.requestedModel && md.requestedModel.model) model = md.requestedModel.model;
 
-      if (ty === 'CORTEX_STEP_TYPE_CHECKPOINT') {
-        var mu = md.modelUsage;
-        if (mu) {
-          var it = parseFloat(mu.inputTokens) || 0;
-          var ot = parseFloat(mu.outputTokens) || 0;
-          if (mu.model) model = mu.model;
-          if (it > 0 || ot > 0) {
-            // 压缩检测：inputTokens 骤降
-            if (prevCkptIn > 0 && it < prevCkptIn && (prevCkptIn - it) > COMPRESS_MIN_DROP) {
-              compressed = true;
-            }
-            prevCkptIn = it;
-            ckptIn = it; ckptOut = ot;
-            estOverhead = 0;
-            outSinceCkpt = 0;
-          }
+      // ⚠ 两个类型都认：新版在 PLANNER_RESPONSE，别的在 CHECKPOINT
+      var u = usageOf(md.modelUsage);
+      if (u) {
+        if (u.model) model = u.model;
+        // 压缩检测：上下文相对上一个 usage 骤降
+        if (prevCtx > 0 && u.ctx < prevCtx && (prevCtx - u.ctx) > COMPRESS_MIN_DROP) {
+          compressed = true;
         }
+        prevCtx = u.ctx;
+        last = u;
+        estOverhead = 0;
+        toolSinceUsage = 0;
       }
     }
 
-    if (ckptIn !== undefined) {
-      var delta = outSinceCkpt + estOverhead;
+    if (last) {
+      var delta = toolSinceUsage + estOverhead;
       return {
-        used: ckptIn + ckptOut + delta,
-        input: ckptIn, output: ckptOut, est: delta,
-        model: model, hasCkpt: true, compressed: compressed, src: delta > 0 ? 'mixed' : 'api',
+        used: last.ctx + delta,
+        input: last.input + last.cacheRead,   // 真实上下文主体（含缓存命中）
+        cacheRead: last.cacheRead,
+        output: last.output, est: delta,
+        model: model, hasCkpt: true, compressed: compressed,
+        src: delta > 0 ? 'mixed' : 'api',
       };
     }
 
     var total = SYS_PROMPT_OVERHEAD + totalToolOut + estOverhead;
     return {
-      used: total, input: 0, output: 0, est: total,
+      used: total, input: 0, cacheRead: 0, output: 0, est: total,
       model: model, hasCkpt: false, compressed: false, src: 'estimate',
     };
   }
@@ -339,6 +459,7 @@
         CONV.ok = true;
         CONV.used = r.used;
         CONV.input = r.input;
+        CONV.cacheRead = r.cacheRead || 0;
         CONV.output = r.output;
         CONV.est = r.est;
         CONV.model = r.model;
@@ -484,9 +605,10 @@
 
     // 卡片
     var segs = [
-      [CONV.input, C.conv],
+      [Math.max(0, CONV.input - CONV.cacheRead), C.sys],   // 未命中缓存（真实新增）
+      [CONV.cacheRead, C.conv],                            // 缓存命中（历史上下文主体）
       [CONV.output, C.tool],
-      [CONV.est, C.sys],
+      [CONV.est, '#a78bfa'],                               // usage 之后的增量估算
       [BUDGET.total, C.rule],
     ];
     var bar = '';
@@ -507,9 +629,10 @@
 
     var rows = '';
     if (CONV.ok && CONV.hasCkpt) {
-      rows = row('输入（checkpoint）', CONV.input, C.conv)
-        + row('输出', CONV.output, C.tool)
-        + row('增量估算', CONV.est, C.sys);
+      rows = row('历史上下文（缓存命中）', CONV.cacheRead, C.conv)
+        + row('本轮新增输入', Math.max(0, CONV.input - CONV.cacheRead), C.sys)
+        + row('本轮输出', CONV.output, C.tool);
+      if (CONV.est > 0) rows += row('后续增量（估算）', CONV.est, '#a78bfa');
     } else if (CONV.ok) {
       rows = row('系统提示词', SYS_PROMPT_OVERHEAD, C.sys)
         + row('工具与响应（估算）', Math.max(0, CONV.est - SYS_PROMPT_OVERHEAD), C.tool);
@@ -541,11 +664,21 @@
 
   function boot() {
     if (!document.body) { setTimeout(boot, 60); return; }
+    // 先 hook，越早越好 —— 页面自己的 RPC 一旦发出就能嗅到 token
+    sniffCsrf();
     build();
-    refresh();
+    waitCsrfAndRefresh();
     setInterval(function () {
       if (!document.hidden) refresh();
     }, CFG.POLL_MS);
+  }
+
+  // token 一般启动即可用；万一还没就绪，短暂重试几轮（最多 ~4s）
+  function waitCsrfAndRefresh(tries) {
+    tries = tries || 0;
+    if (!CSRF) CSRF = readCsrfFromGlobal();
+    if (CSRF || tries > 10) { refresh(); return; }
+    setTimeout(function () { waitCsrfAndRefresh(tries + 1); }, 400);
   }
 
   window.__AGL_CTX_PANEL__ = { refresh: refresh };

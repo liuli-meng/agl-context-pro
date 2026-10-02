@@ -71,17 +71,22 @@ Antigravity IDE 的上下文用量三重监控扩展：状态栏同时显示 **�
 Antigravity **桌面版**是纯 Electron 壳（非 VS Code 内核，装不了 VSIX）。[desktop-inject/](desktop-inject/) 提供直接注入方案：把一段脚本追加进 `app.asar` 内的 `dist/preload.js`，在**主界面右下角**渲染一个 DeepSeek / ZCode 风格的浮动胶囊 —— 点击展开分段彩条 + 明细卡片。
 
 ```
-27%  ~266K / ~1.0M  Gemini 3.8 Flash (High)     ← 胶囊
+20%  ~200K / ~1.0M  Gemini 3.8 Flash (High)     ← 胶囊
 ┌─────────────────────────────────────┐
-│ 上下文已用 27%          ~266K / ~1.0M │
-│ ▓▓▓▓▓▓▓▓▓▓░░░░░░░░░░░░░░░░░░░░░░░░  │
-│ ■ 系统提示词                    ~1.5K │
-│ ■ 工具定义                      ~5.6K │
-│ ■ 对话消息                       ~259K │
+│ 上下文已用 20%          ~200K / ~1.0M │
+│ ▓▓▓▓▓▓▓▓░░░░░░░░░░░░░░░░░░░░░░░░░░░░ │
+│ ■ 历史上下文（缓存命中）        ~196K │
+│ ■ 本轮新增输入                  ~3.2K │
+│ ■ 本轮输出                       ~588 │
 │ ■ Rules / Skills                ~1.7K │
-│ 剩余可用 ~734K · input ~2.7K / cache ~256K │
+│ 剩余可用 ~800K · 精确               │
+│ 会话：遗留问题与设计梳理  步数：248   │
 └─────────────────────────────────────┘
 ```
+
+**认证**：LS 的每个 RPC 都要 CSRF token（缺了返回 `401 missing CSRF token`）。页面把它挂在全局 `window.__APP_CONFIG__.csrfToken`，面板直接读，请求时带 `X-Codeium-Csrf-Token` + `Connect-Protocol-Version: 1`。
+
+**用量口径（实测）**：`modelUsage` 挂在**末个 `PLANNER_RESPONSE`** 步上（2.19.1 实测无 CHECKPOINT 步），真实上下文 = `inputTokens + cacheReadTokens`（+ 本轮 `outputTokens`）。`inputTokens` 只是未命中缓存的增量（实测 2.7K），`cacheReadTokens` 才是历史上下文主体（实测 196K）——**两个都要算**。
 
 **为什么能这么做**：主界面由 `language_server.exe` 提供的本地页 `https://127.0.0.1:<动态端口>/` 渲染，preload 与页面**同源**，可以直接 `fetch` LS 的 RPC —— 不需要 CIM 探测进程、不需要 netstat 找端口、不解析日志。
 
