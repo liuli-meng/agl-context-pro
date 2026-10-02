@@ -95,6 +95,87 @@ AGL Context Pro 的面板是通过补丁 `app.asar` 注入的。更新后 asar �
 **坑 B：更新也会冲掉汉化补丁（Antigravity-CN）。**
 这个脚本管不了，需要更新完后手动重跑汉化 patcher。
 
+---
+
+## 附：另一个更常遇到的坑 —— 窗口全黑
+
+### 现象
+
+打开 Antigravity，窗口出来了、标题栏正常，但**内容区一片黑**，什么都没有。
+
+### 病因（跟 asar、汉化、面板都无关）
+
+Antigravity 的界面**不是静态文件**，而是由 `language_server.exe` 通过
+`https://127.0.0.1:<随机端口>/` 提供的（LS 日志里那句
+`Serving UI bundle from embedded assets`）。渲染进程加载这个 URL 有
+**30 秒硬超时**。
+
+而 LS 冷启动可能超过 30 秒。日志里的典型样子：
+
+```
+13:43:23  Starting language server process with pid 26556
+13:43:40  URL: https://daily-cloudcode-pa.googleapis.com/...:loadCodeAssist
+13:43:51  URL: https://daily-cloudcode-pa.googleapis.com/...:loadCodeAssist   ← 隔了 11s，超时重试
+13:43:53  URL: https://daily-cloudcode-pa.googleapis.com/...:loadCodeAssist
+13:43:55  initialized server successfully in 31.9092809s                       ← 31.9s！
+```
+
+渲染进程在 13:43:53 就 `ERR_TIMED_OUT` 放弃了，LS 只差 2 秒。于是 Chromium
+停在错误页 `chrome-error://chromewebdata/`，就是你看到的全黑窗口。
+
+### 为什么 LS 会慢到 30 秒
+
+**`language_server.exe` 是 Go 二进制，只认 `HTTP_PROXY` / `HTTPS_PROXY`
+环境变量，不认 Windows 系统代理（WinINET）**，也就是 v2rayN 设的那个。
+
+如果直接双击 `Antigravity.exe`（开始菜单快捷方式就是这么指过去的），
+LS 会**直连** `oauth2.googleapis.com` / `cloudcode-pa.googleapis.com`。
+国内直连这俩就是超时重试，启动自然被拖到 30 秒开外。
+
+`D:\Antigravity\Antigravity-proxy.cmd` 就是为了解决这个而存在的 —— 它先设好
+
+```bat
+set "HTTP_PROXY=http://127.0.0.1:10808"
+set "HTTPS_PROXY=http://127.0.0.1:10808"
+set "NO_PROXY=localhost,127.0.0.1,::1"
+```
+
+再启动 exe（v2rayN 的 10808 是 mixed 入站，同时支持 socks5 和 HTTP CONNECT）。
+`NO_PROXY` 里排除 127.0.0.1，保证应用自己的本地 gRPC 走直连。
+
+**但开始菜单的 `Antigravity.lnk` 指向的是 `Antigravity.exe`，不是这个启动器** ——
+proxy 环境变量根本没生效。
+
+### 怎么判断当前实例有没有走代理
+
+```bat
+netstat -ano | findstr :10808
+```
+
+看 `language_server.exe` 的 PID 在不在这个列表里。不在 = 直连 = 随时可能黑屏。
+
+### 立即修复（不重启应用）
+
+```cmd
+cd "E:\AGL Context Pro\tools"
+node fix-black-screen.js
+```
+
+它会：找出 CDP 端口 → 判断窗口是否停在错误页 → 轮询等 LS 真正就绪 →
+发一次 `Page.reload` → 复验渲染与面板。加 `--check` 只检测不重载。
+
+### 根治
+
+让 Antigravity 始终带上代理环境变量启动，二选一：
+
+1. **把开始菜单快捷方式改成指向 `Antigravity-proxy.cmd`**（最简单）
+2. **改造 `Antigravity-proxy.cmd` 成自适应版**：先探测 10808 是否在监听，
+   在才设代理变量；不在就直连启动（避免 v2rayN 没开时反而连不上）
+
+方案 2 更稳，因为 v2rayN 不运行时，写死代理会让 LS 直接连不上。
+
+---
+
 ## 为什么脚本里全是英文
 
 这个 `.cmd` **故意只写 ASCII 字符 + CRLF 换行**。
