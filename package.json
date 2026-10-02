@@ -49,7 +49,9 @@
     }
   },
   "scripts": {
-    "test": "node test/run-tests.js",
+    "test": "node test/run-tests.js && node test/panel-pure.js",
+    "test:ls": "node test/run-tests.js",
+    "test:panel": "node test/panel-pure.js",
     "package": "python build.py"
   },
   "repository": {
