@@ -104,7 +104,10 @@ function install(customPath) {
     console.log('📸 快照 app.asar.prev.bak');
   } catch (e) { /* ignore */ }
 
-  const panelCode = fs.readFileSync(path.join(__dirname, 'src', 'panel.js'), 'utf8');
+  // 面板依赖 theme.js（设计 token 层），按顺序拼接后一起注入。
+  // 两个文件各自带 START/END 标记，stripBlock 会一起清掉，幂等不受影响。
+  const read = (f) => fs.readFileSync(path.join(__dirname, 'src', f), 'utf8');
+  const panelCode = read('theme.js').trimEnd() + '\n\n' + read('panel.js');
 
   // 关键：以「当前 asar」为基准（而非 .bak），才能在汉化补丁之上叠加。
   // 若当前 asar 已含本面板块则先剥离，保证幂等。

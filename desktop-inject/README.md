@@ -2,9 +2,36 @@
 
 给 **Antigravity 桌面版**主界面右下角加一个 DeepSeek / ZCode 风格的上下文用量胶囊。
 
-- 右下角浮动胶囊：`20% ~200K / ~1.0M Gemini 3.8 Flash (High)`
-- 点击展开卡片：分段彩条 + 明细（历史上下文 / 本轮新增 / 输出 / Rules·Skills）+ 剩余可用
+- 右下角浮动胶囊：`◔ 20% │ 200K / 1M  Gemini 3.8 Flash (High)`
+- 点击展开卡片：分段彩条 + 明细（历史上下文 / 本轮新增 / 输出 / Rules·Skills）+ 来源与剩余
+- **自动跟随系统亮/暗主题**（token 层驱动，不需要两套 CSS）
 - 5 秒轮询自动刷新，只在页面可见时拉取
+
+## 视觉规范
+
+`src/theme.js` 是独立的设计 token 层，三层结构对齐 DeepSeek Harness / ZCode 桌面版：
+
+```
+原始色阶  →  语义别名  →  组件 CSS
+PALETTE      LIGHT/DARK    panel.js 里只写 var(--agl-*)
+```
+
+| 层 | DSH 对应 | ZCode 对应 | 本项目 |
+|---|---|---|---|
+| 原始 | `--dsw-static-neutral-bluish-*` | `--v2-grey-*` / `--v2-alpha-*` | `PALETTE` |
+| 语义 | `--dsw-alias-label-primary` | `--v2-text-text-base` | `LIGHT` / `DARK` |
+| 组件 | 直接引用 alias | `[data-component=...]` | `var(--agl-text-primary)` |
+
+几条从源码里提炼的原则：
+
+1. **中性色带蓝味，不用纯灰**。两家都是（DSH `#0f1115`/`#61666b`，ZCode `#161616`/`#5c5c5c`）——纯灰显脏。本项目 `PALETTE.n*` 全系偏冷。
+2. **大面积中性 + 极少量彩色**。彩色只给进度条 fill 和状态点，文字全走灰阶。避免四五个饱和色块并排。
+3. **边框极淡**。DSH `border-l2 = #0000001a`、ZCode `--v2-alpha-dark-10`，本项目 `border-hair` = 7% 不透明度。靠层次和留白区分，不靠描边。
+4. **字号阶梯 12/13/14/15/22，行高 1.3/1.5，字重 400/500/600**，与两家一致。
+5. **数字全用 `tabular-nums`**，位数变化时不跳动。
+6. **主数字只出现一次**（卡片右上角那个大百分比），不在别处重复。
+
+改主题只需要动 `theme.js`，`panel.js` 里的 CSS 一行不用改。
 
 ## 原理
 
@@ -14,6 +41,9 @@ Antigravity 桌面版是**纯 Electron 壳**（不是 VS Code 内核，装不了
 所以做法是：**把一段脚本追加进 `app.asar` 内的 `dist/preload.js`**。
 preload 在每个页面加载前执行，且**与页面同源** —— 可以直接 `fetch` LS 的 RPC，
 不需要 psutil 探测进程、也不解析日志。
+
+注入时 `theme.js` 与 `panel.js` 按顺序拼接成一个块（两者各自带 START/END 标记，
+幂等清理会一起处理），所以仓库里是两个源文件、asar 里是一个块。
 
 ## 用法
 

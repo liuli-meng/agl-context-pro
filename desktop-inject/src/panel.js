@@ -5,12 +5,16 @@
  * 同源优势：页面本身就跑在 LS 端口上，因此可以直接 fetch LS 的 RPC，
  * 不需要 psutil / 日志解析那一套外部探测。
  *
- * UI：右下角浮动胶囊显示占用百分比，点击展开卡片（对标 DeepSeek / ZCode）。
+ * UI 规范：对齐 DeepSeek Harness / ZCode 桌面版设计体系（token 见同目录 theme.js）。
+ * 核心原则：大面积中性色 + 极少量彩色，靠层次/留白而不是边框和饱和色块来区分信息。
  */
 (function () {
   'use strict';
 
   if (window.__AGL_CTX_PANEL__) return;
+
+  var T = window.AGL_THEME;
+  var M_ = T.METRIC;
 
   var CFG = {
     POLL_MS: 5000,
@@ -19,15 +23,17 @@
   };
 
   // ---------------------------------------------------------------- 颜色
+  // 语义名只在渲染时取，实际值由 CSS 变量解析（支持亮/暗自动切换）
   var C = {
-    ok: '#3b82f6',
-    warn: '#f59e0b',
-    danger: '#ef4444',
-    sys: '#9aa3ad',
-    tool: '#8b7cf6',
-    conv: '#3b82f6',
-    rule: '#10b981',
-    track: 'rgba(127,127,127,.22)',
+    ok: 'var(--agl-state-ok)',
+    warn: 'var(--agl-state-warn)',
+    danger: 'var(--agl-state-danger)',
+    sys: 'var(--agl-seg-sys)',
+    tool: 'var(--agl-seg-out)',
+    conv: 'var(--agl-seg-conv)',
+    rule: 'var(--agl-seg-rule)',
+    accent: 'var(--agl-accent)',
+    track: 'var(--agl-bg-track)',
   };
 
   // ---------------------------------------------------------------- 模型
@@ -79,12 +85,11 @@
 
   function fmtTok(n) {
     n = Number(n) || 0;
-    if (n >= 1000000) return '~' + (n / 1e6).toFixed(1) + 'M';
-    if (n >= 1000) return '~' + (n / 1000).toFixed(n >= 100000 ? 0 : 1) + 'K';
-    return '~' + Math.round(n);
+    if (n >= 1000000) return (n / 1e6).toFixed(2).replace(/\.?0+$/, '') + 'M';
+    if (n >= 1000) return (n / 1000).toFixed(n >= 100000 ? 0 : 1).replace(/\.0$/, '') + 'K';
+    return String(Math.round(n));
   }
 
-  // ---------------------------------------------------------------- RPC
   // ---------------------------------------------------------------- CSRF
   /*
    * ⚠ 关键：LS 要求每个请求带 CSRF token，否则 401 {"code":"unauthenticated"}。
@@ -126,7 +131,6 @@
   }
 
   function sniffCsrf() {
-    // 1) 先直接读全局
     var direct = readCsrfFromGlobal();
     if (direct) CSRF = direct;
 
@@ -136,7 +140,6 @@
       if (!src) return '';
       try {
         if (typeof src.forEach === 'function' && typeof src.get === 'function') {
-          // Headers 实例
           for (var i = 0; i < HEADERS.length; i++) {
             var v = src.get(HEADERS[i]);
             if (v) return v;
@@ -166,7 +169,6 @@
 
     // 2) hook XHR（页面有些调用走 XHR）
     try {
-      var _open = XMLHttpRequest.prototype.open;
       var _setH = XMLHttpRequest.prototype.setRequestHeader;
       if (!_setH.__aglHooked) {
         var newSet = function (k, v) {
@@ -179,7 +181,6 @@
     } catch (e) { /* ignore */ }
   }
 
-  /** 拿不到 token 时，从内存里的已知位置兜底捞一遍 */
   function rpc(method, body) {
     return new Promise(function (resolve, reject) {
       if (!CSRF) CSRF = readCsrfFromGlobal();   // 每轮兜一次，防首页加载时未就绪
@@ -218,8 +219,8 @@
     ok: false, used: 0, limit: 0, input: 0, cacheRead: 0, output: 0, est: 0,
     model: '', summary: '', steps: 0, compressed: false, src: 'estimate',
   };
-  var LABELS = {};   // model -> 官方 label（动态拉取）
-  var TRACKED_CID = '';  // 当前跟踪的会话 id（跨轮询保持，防抖）
+  var LABELS = {};
+  var TRACKED_CID = '';
 
   // —— 算法常量 ——
   // ⚠ 真实数据实测（2026-10-02，Antigravity 2.19.1）：
@@ -228,11 +229,11 @@
   //   · inputTokens 只是「本轮未命中缓存的增量」（实测 2721）
   //     真正的上下文在 cacheReadTokens（实测 191639）
   //     → 真实上下文 ≈ inputTokens + cacheReadTokens（+ 本轮 outputTokens）
-  var SYS_PROMPT_OVERHEAD = 10000;   // 完全无 usage 时的系统提示词兜底
+  var SYS_PROMPT_OVERHEAD = 10000;
   var USER_INPUT_FALLBACK = 500;
   var PLANNER_FALLBACK = 800;
-  var COMPRESS_MIN_DROP = 5000;      // 相邻 usage 上下文骤降阈值（压缩检测）
-  var MAX_STEPS = 2000;              // 拉取上限，防爆
+  var COMPRESS_MIN_DROP = 5000;
+  var MAX_STEPS = 2000;
   var BATCH = 50, CONCURRENCY = 5;
 
   /**
@@ -258,20 +259,12 @@
     return { input: it, cacheRead: cr, output: ot, ctx: it + cr + ot, model: mu.model || '' };
   }
 
-  /**
-   * 从 steps 里算真实上下文用量（实测口径）：
-   *
-   *   1) 取**最后一个带 modelUsage 的步**，上下文 = inputTokens + cacheReadTokens + outputTokens
-   *      （不逐轮累加 —— inputTokens 已经是累计前缀，累加会爆炸）
-   *   2) 该步之后的 toolCall 输出 + 字符估算，作为增量补上
-   *   3) 一个 usage 都没有才退回「系统提示词 + 工具输出估算」
-   */
   function computeUsageFromSteps(steps, initialModel) {
-    var totalToolOut = 0;          // 全程工具输出（兜底用）
-    var estOverhead = 0;           // 最近一个 usage 之后的字符估算增量
-    var toolSinceUsage = 0;        // 最近一个 usage 之后的工具输出
+    var totalToolOut = 0;
+    var estOverhead = 0;
+    var toolSinceUsage = 0;
     var model = initialModel || '';
-    var last = null;               // 最后一个有效 usage
+    var last = null;
     var prevCtx = -1;
     var compressed = false;
 
@@ -314,7 +307,6 @@
       var u = usageOf(md.modelUsage);
       if (u) {
         if (u.model) model = u.model;
-        // 压缩检测：上下文相对上一个 usage 骤降
         if (prevCtx > 0 && u.ctx < prevCtx && (prevCtx - u.ctx) > COMPRESS_MIN_DROP) {
           compressed = true;
         }
@@ -329,7 +321,7 @@
       var delta = toolSinceUsage + estOverhead;
       return {
         used: last.ctx + delta,
-        input: last.input + last.cacheRead,   // 真实上下文主体（含缓存命中）
+        input: last.input + last.cacheRead,
         cacheRead: last.cacheRead,
         output: last.output, est: delta,
         model: model, hasCkpt: true, compressed: compressed,
@@ -346,7 +338,6 @@
 
   /** 官方模型表：把 MODEL_PLACEHOLDER_XXX → "Gemini 3.8 Flash (High)" */
   function loadModels() {
-    // 优先 GetUserStatus（开源实现用的这个，一并带回模型表 + 额度）
     return rpc('GetUserStatus', {
       metadata: { ideName: 'antigravity', extensionName: 'antigravity' },
     }).then(function (d) {
@@ -355,7 +346,6 @@
       if (!cfgs.length) throw new Error('empty');
       indexModels(cfgs);
     }).catch(function () {
-      // 退回 GetCascadeModelConfigData
       return rpc('GetCascadeModelConfigData', {}).then(function (d) {
         indexModels((d && d.clientModelConfigs) || []);
       }).catch(function () { /* 保留兜底表 */ });
@@ -385,7 +375,7 @@
     }).catch(function () { /* 保留上次值 */ });
   }
 
-  /** 拉一个轨迹的全部步骤：分批 50，并发 5（开源同款策略） */
+  /** 拉一个轨迹的全部步骤：分批 50，并发 5 */
   function fetchAllSteps(cid, stepCount) {
     var total = Math.min(Math.max(stepCount, 0), MAX_STEPS);
     if (!total) return Promise.resolve([]);
@@ -439,7 +429,7 @@
         return b.lastModifiedTime.localeCompare(a.lastModifiedTime);
       });
 
-      // 会话选择（对齐开源策略）：RUNNING > 上次跟踪的 > 第一个
+      // 会话选择：RUNNING > 上次跟踪的 > 第一个
       var pick = null;
       var running = list.filter(function (t) {
         return t.status === 'CASCADE_RUN_STATUS_RUNNING';
@@ -485,7 +475,6 @@
   }
 
   // ---------------------------------------------------------------- 计算
-  // ⚠ 不再自己拼 SYS_TOK/TOOL_TOK —— computeUsageFromSteps 已经含系统开销。
   function metrics() {
     var used = CONV.ok ? CONV.used : 0;
     var limit = (CONV.ok && CONV.limit) ? CONV.limit : M.GEMINI;
@@ -504,60 +493,125 @@
   }
 
   // ---------------------------------------------------------------- 样式
+  /*
+   * 布局遵循两家的共同做法：
+   *   · 视觉层次靠「背景层次 + 留白 + 字重」，不靠粗边框和阴影
+   *   · 数字一律 tabular-nums，位数对齐不跳动
+   *   · 主要信息（百分比）只出现一次，不在多个位置重复
+   *   · 彩色只给进度条 fill 和状态点；文字保持中性灰阶
+   */
   var CSS = [
-    '#agl-ctx{position:fixed;right:18px;bottom:18px;z-index:2147483000;',
-    'font-family:system-ui,-apple-system,"Segoe UI","Microsoft YaHei UI",sans-serif;',
-    '-webkit-user-select:none;user-select:none}',
-    '#agl-ctx *{box-sizing:border-box}',
-    '.agl-pill{display:flex;align-items:center;gap:8px;padding:7px 13px 7px 9px;',
-    'border-radius:999px;cursor:pointer;background:rgba(28,28,32,.86);',
-    'backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);',
-    'border:1px solid rgba(255,255,255,.10);',
-    'box-shadow:0 3px 14px rgba(0,0,0,.30);transition:transform .13s ease,box-shadow .13s ease}',
-    '.agl-pill:hover{transform:translateY(-1px);box-shadow:0 6px 20px rgba(0,0,0,.38)}',
-    '.agl-ring{width:17px;height:17px;flex:0 0 auto}',
-    '.agl-pct{font-size:12.5px;font-weight:600;color:#f2f3f5;letter-spacing:.2px}',
-    '.agl-cap{font-size:11.5px;color:#a9adb6}',
-    '.agl-ml{font-size:11px;color:#8b9099;max-width:108px;overflow:hidden;',
-    'text-overflow:ellipsis;white-space:nowrap}',
+    T.css(),
 
-    '.agl-card{position:absolute;right:0;bottom:calc(100% + 10px);width:344px;',
-    'border-radius:14px;padding:18px 20px 16px;background:rgba(30,30,34,.97);',
-    'backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);',
-    'border:1px solid rgba(255,255,255,.11);box-shadow:0 12px 42px rgba(0,0,0,.5);',
-    'color:#eceef1;opacity:0;transform:translateY(8px) scale(.98);pointer-events:none;',
-    'transition:opacity .16s ease,transform .16s ease}',
+    '#agl-ctx{position:fixed;right:16px;bottom:16px;z-index:2147483000;',
+    'font-family:' + M_.fontUi + ';',
+    '-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;',
+    '-webkit-user-select:none;user-select:none;',
+    'font-size:' + M_.fsBase + ';line-height:' + M_.lhNormal + ';',
+    'color:var(--agl-text-primary)}',
+    '#agl-ctx *{box-sizing:border-box}',
+    '#agl-ctx button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer}',
+
+    /* ---------------- 胶囊：只放三类信息，克制 ---------------- */
+    '.agl-pill{display:flex;align-items:center;gap:9px;height:34px;padding:0 12px 0 10px;',
+    'border-radius:' + M_.rPill + ';cursor:pointer;',
+    'background:var(--agl-bg-pill);',
+    'backdrop-filter:blur(16px) saturate(1.6);-webkit-backdrop-filter:blur(16px) saturate(1.6);',
+    'box-shadow:var(--agl-shadow-pill);',
+    'transition:transform ' + M_.durFast + ' ' + M_.ease + ',box-shadow ' + M_.durFast + ' ' + M_.ease + '}',
+    '.agl-pill:hover{transform:translateY(-1px)}',
+    '.agl-pill:active{transform:translateY(0) scale(.985)}',
+
+    /* 圆环：细一点更像仪表，粗环显笨重 */
+    '.agl-ring{width:15px;height:15px;flex:0 0 auto;display:block}',
+    '.agl-pct{font-size:' + M_.fsBase + ';font-weight:' + M_.fwSemibold + ';',
+    'font-variant-numeric:tabular-nums;letter-spacing:-.01em;line-height:1}',
+    '.agl-pct .u{font-size:10px;font-weight:' + M_.fwMedium + ';opacity:.55;margin-left:.5px}',
+    '.agl-cap{font-size:' + M_.fsSmall + ';color:var(--agl-text-tertiary);',
+    'font-variant-numeric:tabular-nums;line-height:1}',
+    '.agl-sep{width:1px;height:12px;background:var(--agl-border-line);flex:0 0 auto}',
+    '.agl-ml{font-size:' + M_.fsSmall + ';color:var(--agl-text-tertiary);',
+    'max-width:104px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:1}',
+
+    /* ---------------- 卡片 ---------------- */
+    '.agl-card{position:absolute;right:0;bottom:calc(100% + 10px);width:308px;',
+    'border-radius:' + M_.rCard + ';padding:14px 16px 13px;',
+    'background:var(--agl-bg-card);',
+    'backdrop-filter:blur(24px) saturate(1.5);-webkit-backdrop-filter:blur(24px) saturate(1.5);',
+    'box-shadow:var(--agl-shadow-card);',
+    'opacity:0;transform:translateY(6px) scale(.985);transform-origin:100% 100%;',
+    'pointer-events:none;',
+    'transition:opacity ' + M_.durFast + ' ' + M_.ease + ',transform ' + M_.durFast + ' ' + M_.ease + '}',
     '.agl-card.open{opacity:1;transform:none;pointer-events:auto}',
 
-    '.agl-hd{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:13px}',
-    '.agl-hd .t{font-size:13px;color:#a9adb6}',
-    '.agl-hd .p{font-size:26px;font-weight:700;line-height:1;margin-left:8px}',
-    '.agl-hd .c{font-size:13px;font-weight:600;color:#eceef1}',
+    /* 标题行：左边小字标签，右边大数字。数字是主角，但只出现这一次 */
+    '.agl-hd{display:flex;align-items:center;justify-content:space-between;',
+    'gap:10px;margin-bottom:10px}',
+    '.agl-hd .lab{font-size:' + M_.fsSmall + ';color:var(--agl-text-secondary);',
+    'font-weight:' + M_.fwMedium + ';letter-spacing:.01em}',
+    '.agl-hd .val{display:flex;align-items:baseline;gap:2px;',
+    'font-variant-numeric:tabular-nums}',
+    '.agl-hd .val b{font-size:' + M_.fsHero + ';font-weight:' + M_.fwSemibold + ';',
+    'line-height:1;letter-spacing:-.02em}',
+    '.agl-hd .val i{font-size:' + M_.fsSmall + ';font-style:normal;opacity:.5;font-weight:' + M_.fwMedium + '}',
 
-    '.agl-bar{display:flex;height:9px;border-radius:5px;overflow:hidden;',
-    'background:rgba(127,127,127,.24);margin-bottom:15px}',
-    '.agl-bar i{display:block;height:100%}',
+    /* 容量说明单独一行，小字弱化，避免和主数字抢注意力 */
+    '.agl-sub{font-size:' + M_.fsSmall + ';color:var(--agl-text-tertiary);',
+    'font-variant-numeric:tabular-nums;margin:-6px 0 11px;line-height:' + M_.lhTight + '}',
 
-    '.agl-row{display:flex;align-items:center;gap:9px;padding:5px 0;font-size:12.5px}',
-    '.agl-dot{width:9px;height:9px;border-radius:2.5px;flex:0 0 auto}',
-    '.agl-row .l{flex:1;color:#d6d9de}',
-    '.agl-row .v{font-variant-numeric:tabular-nums;color:#eceef1;font-weight:500}',
+    /* 进度条：8px 高、圆头、底槽是内嵌色而非边框 */
+    '.agl-bar{display:flex;height:8px;border-radius:' + M_.rTrack + ';overflow:hidden;',
+    'background:var(--agl-bg-track);margin-bottom:14px}',
+    '.agl-bar i{display:block;height:100%;transition:width .35s ' + M_.ease + '}',
+    // 段与段之间留 1.5px 缝隙（用背景色描边切开），避免同色段糊成一片
+    '.agl-bar i:not(:last-child){box-shadow:1.5px 0 0 0 var(--agl-bg-card)}',
 
-    '.agl-ft{margin-top:12px;padding-top:11px;border-top:1px solid rgba(255,255,255,.09);',
-    'font-size:11px;color:#8b9099;line-height:1.65}',
-    '.agl-warn{color:#f59e0b}',
+    /* 明细行：dot 更小，标签中性色，数值同色但加粗 —— 不再每行一个饱和色 */
+    '.agl-row{display:flex;align-items:center;gap:8px;padding:3.5px 0;',
+    'font-size:' + M_.fsSmall + ';line-height:' + M_.lhTight + '}',
+    '.agl-dot{width:6px;height:6px;border-radius:' + M_.rDot + ';flex:0 0 auto}',
+    '.agl-row .l{flex:1;color:var(--agl-text-secondary);',
+    'overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+    '.agl-row .v{color:var(--agl-text-primary);font-weight:' + M_.fwMedium + ';',
+    'font-variant-numeric:tabular-nums;font-family:' + M_.fontNum + ';font-size:11.5px}',
+
+    /* 底注：细分隔线 + 极小字，只承载元信息 */
+    '.agl-ft{margin-top:11px;padding-top:9px;border-top:1px solid var(--agl-border-hair);',
+    'font-size:11px;color:var(--agl-text-tertiary);line-height:1.55;',
+    'display:flex;flex-direction:column;gap:1px}',
+    '.agl-ft .r{display:flex;align-items:center;gap:8px}',
+    // key 定宽右对齐，value 左对齐 —— 三行标签垂直对齐，读起来是表格而不是流水句
+    '.agl-ft .k{color:var(--agl-text-faint);flex:0 0 auto;width:30px;text-align:right}',
+    '.agl-ft .t{color:var(--agl-text-secondary);overflow:hidden;',
+    'text-overflow:ellipsis;white-space:nowrap;min-width:0}',
+    '.agl-ft .t.num{font-variant-numeric:tabular-nums;font-family:' + M_.fontNum + '}',
+
+    /* 状态徽标：极小的胶囊，比纯彩色文字更清晰 */
+    '.agl-tag{display:inline-flex;align-items:center;height:16px;padding:0 5px;',
+    'border-radius:4px;background:var(--agl-bg-inset);',
+    'font-size:10px;font-weight:' + M_.fwMedium + ';color:var(--agl-text-secondary);',
+    'letter-spacing:.02em;line-height:1}',
+    '.agl-tag.warn{color:var(--agl-state-warn)}',
+
+    /* 加载骨架 */
+    '.agl-sk{background:var(--agl-bg-inset);border-radius:4px;',
+    'animation:agl-sk 1.4s ' + M_.ease + ' infinite}',
+    '@keyframes agl-sk{0%,100%{opacity:1}50%{opacity:.45}}',
+    '@media (prefers-reduced-motion:reduce){',
+    '.agl-card,.agl-pill,.agl-bar i{transition:none}',
+    '.agl-sk{animation:none}}',
   ].join('');
 
   function ringSvg(pct) {
     var col = stateColor(pct);
-    var r = 6.6, cir = 2 * Math.PI * r;
+    var r = 5.8, cir = 2 * Math.PI * r, sw = 2.2;
     var off = cir * (1 - Math.min(pct, 100) / 100);
-    return '<svg class="agl-ring" viewBox="0 0 17 17">'
-      + '<circle cx="8.5" cy="8.5" r="' + r + '" fill="none" stroke="' + C.track + '" stroke-width="2.6"/>'
-      + '<circle cx="8.5" cy="8.5" r="' + r + '" fill="none" stroke="' + col + '" stroke-width="2.6"'
-      + ' stroke-linecap="round" stroke-dasharray="' + cir.toFixed(1) + '"'
-      + ' stroke-dashoffset="' + off.toFixed(1) + '"'
-      + ' transform="rotate(-90 8.5 8.5)"/></svg>';
+    return '<svg class="agl-ring" viewBox="0 0 15 15" aria-hidden="true">'
+      + '<circle cx="7.5" cy="7.5" r="' + r + '" fill="none" stroke="var(--agl-bg-track)" stroke-width="' + sw + '"/>'
+      + '<circle cx="7.5" cy="7.5" r="' + r + '" fill="none" stroke="' + col + '" stroke-width="' + sw + '"'
+      + ' stroke-linecap="round" stroke-dasharray="' + cir.toFixed(2) + '"'
+      + ' stroke-dashoffset="' + off.toFixed(2) + '"'
+      + ' transform="rotate(-90 7.5 7.5)"/></svg>';
   }
 
   // ---------------------------------------------------------------- DOM
@@ -572,43 +626,81 @@
     root.id = 'agl-ctx';
     root.innerHTML =
       '<div class="agl-card" id="agl-card"></div>'
-      + '<div class="agl-pill" id="agl-pill"></div>';
+      + '<div class="agl-pill" id="agl-pill" role="button" tabindex="0" aria-label="上下文用量"></div>';
     document.body.appendChild(root);
 
     pill = root.querySelector('#agl-pill');
     card = root.querySelector('#agl-card');
 
-    pill.addEventListener('click', function (e) {
-      e.stopPropagation();
+    // 跟随宿主主题（Antigravity 有暗色标记时同步）
+    syncTheme();
+    if (window.matchMedia) {
+      try {
+        window.matchMedia('(prefers-color-scheme:dark)').addEventListener('change', syncTheme);
+      } catch (e) { /* ignore */ }
+    }
+    setInterval(syncTheme, 4000);
+
+    function toggle() {
       open = !open;
       card.classList.toggle('open', open);
       if (open) refresh();
+    }
+    pill.addEventListener('click', function (e) { e.stopPropagation(); toggle(); });
+    pill.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); }
     });
     card.addEventListener('click', function (e) { e.stopPropagation(); });
     document.addEventListener('click', function () {
       if (open) { open = false; card.classList.remove('open'); }
     });
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && open) { open = false; card.classList.remove('open'); }
+    });
+  }
+
+  /** 宿主是暗色就加标记，让 token 层切到暗色 */
+  function syncTheme() {
+    if (!root) return;
+    var dark = false;
+    try {
+      if (window.matchMedia && window.matchMedia('(prefers-color-scheme:dark)').matches) dark = true;
+      var de = document.documentElement;
+      if (de) {
+        if (de.hasAttribute('data-ds-dark-theme') || de.classList.contains('dark')) dark = true;
+        var bg = getComputedStyle(document.body || de).backgroundColor || '';
+        var m = bg.match(/(\d+),\s*(\d+),\s*(\d+)/);
+        if (m) {
+          var lum = (0.299 * +m[1] + 0.587 * +m[2] + 0.114 * +m[3]) / 255;
+          if (de.classList.contains('vscode-dark')) dark = true;
+          else if (bg && bg !== 'rgba(0, 0, 0, 0)' && !de.hasAttribute('data-ds-dark-theme')) dark = lum < 0.45;
+        }
+      }
+    } catch (e) { /* ignore */ }
+    if (dark) root.setAttribute('data-agl-dark', '');
+    else root.removeAttribute('data-agl-dark');
   }
 
   function render() {
     if (!root) return;
     var m = metrics();
-    var col = m.known ? stateColor(m.pct) : '#8b9099';
-
-    // 胶囊
+    var col = m.known ? stateColor(m.pct) : 'var(--agl-text-faint)';
+    var pctTxt = m.known ? String(Math.round(m.pct)) : '·';
     var capTxt = fmtTok(m.total) + ' / ' + fmtTok(m.limit);
-    pill.innerHTML = ringSvg(m.known ? m.pct : 0)
-      + '<span class="agl-pct" style="color:' + col + '">'
-      + (m.known ? Math.round(m.pct) + '%' : '···') + '</span>'
-      + '<span class="agl-cap">' + capTxt + '</span>'
-      + (CONV.ok ? '<span class="agl-ml">' + nameOf(CONV.model) + '</span>' : '');
 
-    // 卡片
+    // ---------------- 胶囊 ----------------
+    pill.innerHTML = ringSvg(m.known ? m.pct : 0)
+      + '<span class="agl-pct" style="color:' + col + '">' + pctTxt + '<span class="u">%</span></span>'
+      + '<span class="agl-sep"></span>'
+      + '<span class="agl-cap">' + capTxt + '</span>'
+      + (CONV.ok ? '<span class="agl-ml">' + esc(nameOf(CONV.model)) + '</span>' : '');
+
+    // ---------------- 卡片 ----------------
     var segs = [
-      [Math.max(0, CONV.input - CONV.cacheRead), C.sys],   // 未命中缓存（真实新增）
-      [CONV.cacheRead, C.conv],                            // 缓存命中（历史上下文主体）
+      [CONV.cacheRead, C.conv],
+      [Math.max(0, CONV.input - CONV.cacheRead), C.sys],
       [CONV.output, C.tool],
-      [CONV.est, '#a78bfa'],                               // usage 之后的增量估算
+      [CONV.est, C.tool],
       [BUDGET.total, C.rule],
     ];
     var bar = '';
@@ -616,64 +708,79 @@
     if (m.known) {
       for (var i = 0; i < segs.length; i++) {
         var w = 100 * segs[i][0] / denom;
-        if (w <= 0) continue;
-        bar += '<i style="width:' + Math.min(w, 100).toFixed(3) + '%;background:'
-          + segs[i][1] + '"></i>';
+        if (w <= 0.05) continue;
+        bar += '<i style="width:' + Math.min(w, 100).toFixed(3) + '%;background:' + segs[i][1] + '"></i>';
       }
     }
 
     function row(label, tok, color) {
       return '<div class="agl-row"><span class="agl-dot" style="background:' + color + '"></span>'
-        + '<span class="l">' + label + '</span><span class="v">' + fmtTok(tok) + '</span></div>';
+        + '<span class="l">' + esc(label) + '</span>'
+        + '<span class="v">' + fmtTok(tok) + '</span></div>';
     }
 
     var rows = '';
-    if (CONV.ok && CONV.hasCkpt) {
+    if (!CONV.ok) {
+      rows = '<div class="agl-row"><span class="l" style="color:var(--agl-text-faint)">'
+        + (CONV.err === 'no session' ? '还没有对话' : '数据获取中…') + '</span></div>';
+    } else if (CONV.hasCkpt) {
       rows = row('历史上下文（缓存命中）', CONV.cacheRead, C.conv)
         + row('本轮新增输入', Math.max(0, CONV.input - CONV.cacheRead), C.sys)
         + row('本轮输出', CONV.output, C.tool);
-      if (CONV.est > 0) rows += row('后续增量（估算）', CONV.est, '#a78bfa');
-    } else if (CONV.ok) {
+      if (CONV.est > 0) rows += row('后续增量（估算）', CONV.est, C.tool);
+    } else {
       rows = row('系统提示词', SYS_PROMPT_OVERHEAD, C.sys)
         + row('工具与响应（估算）', Math.max(0, CONV.est - SYS_PROMPT_OVERHEAD), C.tool);
     }
     if (BUDGET.total) rows += row('Rules / Skills', BUDGET.total, C.rule);
 
-    var foot = '';
+    // 底注：来源标记 + 剩余 + 会话/模型
+    var foot;
     if (CONV.ok && CONV.summary) {
       var freeTok = Math.max(0, m.limit - m.total);
       var srcTag = CONV.src === 'api' ? '精确' : (CONV.src === 'mixed' ? '精确+估算' : '估算');
-      foot = '剩余可用 ' + fmtTok(freeTok) + '　·　' + srcTag
-        + '<br>会话：' + String(CONV.summary).slice(0, 26)
-        + '<br>模型：' + nameOf(CONV.model) + '　步数：' + CONV.steps
-        + (CONV.compressed ? '　<span class="agl-warn">⚠ 已压缩</span>' : '');
+      foot = '<div class="r"><span class="k">来源</span>'
+        + '<span class="tag">' + srcTag + '</span>'
+        + (CONV.compressed ? '<span class="tag warn">已压缩</span>' : '') + '</div>'
+        + '<div class="r"><span class="k">剩余</span><span class="t num">' + fmtTok(freeTok) + '</span></div>'
+        + '<div class="r"><span class="k">会话</span><span class="t">' + esc(String(CONV.summary)) + '</span></div>'
+        + '<div class="r"><span class="k">模型</span><span class="t">' + esc(nameOf(CONV.model))
+        + '</span><span class="k" style="width:auto">步数</span><span class="t num">' + CONV.steps + '</span></div>';
     } else {
-      var why = CONV.err === 'no session' ? '还没有对话' : '数据获取中…';
-      foot = '<span class="agl-warn">' + why + '</span>';
+      foot = '<div class="r"><span class="t">'
+        + (CONV.err === 'no session' ? '开启对话后自动统计' : '等待 Antigravity 响应…')
+        + '</span></div>';
     }
 
     card.innerHTML =
       '<div class="agl-hd">'
-      + '<span class="t">上下文已用<span class="p" style="color:' + col + '">'
-      + (m.known ? Math.round(m.pct) + '%' : '—') + '</span></span>'
-      + '<span class="c">' + capTxt + '</span></div>'
+      + '<span class="lab">上下文占用</span>'
+      + '<span class="val"><b style="color:' + col + '">' + (m.known ? Math.round(m.pct) : '—') + '</b>'
+      + '<i>' + (m.known ? '%' : '') + '</i></span>'
+      + '</div>'
+      + '<div class="agl-sub">' + capTxt + ' tokens</div>'
       + '<div class="agl-bar">' + bar + '</div>'
       + rows
       + '<div class="agl-ft">' + foot + '</div>';
   }
 
+  function esc(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
   function boot() {
     if (!document.body) { setTimeout(boot, 60); return; }
-    // 先 hook，越早越好 —— 页面自己的 RPC 一旦发出就能嗅到 token
     sniffCsrf();
     build();
+    render();               // 先出骨架，避免打开瞬间空白
     waitCsrfAndRefresh();
     setInterval(function () {
       if (!document.hidden) refresh();
     }, CFG.POLL_MS);
   }
 
-  // token 一般启动即可用；万一还没就绪，短暂重试几轮（最多 ~4s）
   function waitCsrfAndRefresh(tries) {
     tries = tries || 0;
     if (!CSRF) CSRF = readCsrfFromGlobal();
