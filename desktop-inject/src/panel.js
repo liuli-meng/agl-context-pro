@@ -316,7 +316,18 @@
   var PLANNER_FALLBACK = 800;
   var COMPRESS_MIN_DROP = 5000;
   var MAX_STEPS = 2000;
-  var BATCH = 50, CONCURRENCY = 5;
+
+  /**
+   * 步骤数组超长时只保留**尾部**。
+   *
+   * 为什么不截头：我们要的是最新那条 modelUsage（它决定此刻的上下文占用）。
+   * 截头会把最新的用量丢掉，面板反而停在几千步前的旧值上。
+   */
+  function tailSteps(steps, maxSteps) {
+    var arr = Array.isArray(steps) ? steps : [];
+    var cap = Number(maxSteps) > 0 ? Number(maxSteps) : MAX_STEPS;
+    return arr.length > cap ? arr.slice(arr.length - cap) : arr;
+  }
 
   /**
    * 字符估算 token（无 usage 时的兜底）：
@@ -473,34 +484,28 @@
     }).catch(function () { /* 保留上次值 */ });
   }
 
-  /** 拉一个轨迹的全部步骤：分批 50，并发 5 */
+  /**
+   * 拉轨迹步骤。
+   *
+   * ⚠⚠ 实测坑（2026-10-02，Antigravity 2.19.1）：`GetCascadeTrajectorySteps`
+   *    **忽略 startIndex / endIndex** —— 不管请求哪个区间，回来的都是整个会话。
+   *    实证：`{startIndex:1000, endIndex:1010}`、`{startIndex:500, endIndex:600}`、
+   *    `{startIndex:1039, endIndex:1049}` 三次都返回完整 1049 条。
+   *
+   *    旧实现按 50 一批分批拉（21 批），于是 all 里堆了 **21 份全量副本 = 22029 条**：
+   *      · 每 5 秒轮询白拉 20 倍数据、白遍历 20 倍
+   *      · 序列每回绕一次（尾 33.5K 掉回首 15.3K）就伪造一次「上下文骤降」，
+   *        面板上那个「已压缩」告警其实就是这么来的
+   *    所以改成：**只调用一次**，超长会话在尾部截断。
+   */
   function fetchAllSteps(cid, stepCount) {
-    var total = Math.min(Math.max(stepCount, 0), MAX_STEPS);
-    if (!total) return Promise.resolve([]);
-    var ranges = [];
-    for (var s = 0; s < total; s += BATCH) {
-      ranges.push({ start: s, end: Math.min(s + BATCH, total) });
-    }
-    var all = [];
-    function runGroup(idx) {
-      if (idx >= ranges.length) return Promise.resolve();
-      var group = ranges.slice(idx, idx + CONCURRENCY);
-      return Promise.all(group.map(function (rg) {
-        return rpc('GetCascadeTrajectorySteps', {
-          cascadeId: cid, startIndex: rg.start, endIndex: rg.end,
-        }).then(function (sr) {
-          return (sr && sr.steps) || [];
-        }).catch(function () { return []; });
-      })).then(function (chunks) {
-        chunks.forEach(function (c) {
-          for (var i = 0; i < c.length; i++) {
-            if (c[i] && typeof c[i] === 'object') all.push(c[i]);
-          }
-        });
-        return runGroup(idx + CONCURRENCY);
-      });
-    }
-    return runGroup(0).then(function () { return all; });
+    var want = Math.min(Math.max(stepCount, 0), MAX_STEPS);
+    if (!want) return Promise.resolve([]);
+    return rpc('GetCascadeTrajectorySteps', {
+      cascadeId: cid, startIndex: 0, endIndex: want,
+    }).then(function (sr) {
+      return tailSteps((sr && sr.steps) || [], MAX_STEPS);
+    }).catch(function () { return []; });
   }
 
   function loadConversation() {
@@ -799,12 +804,15 @@
       + (CONV.ok ? '<span class="agl-ml">' + esc(nameOf(CONV.model)) + '</span>' : '');
 
     // ---------------- 卡片 ----------------
+    // ⚠ 分段只画「真正构成上下文」的部分。
+    //   Rules / Skills 虽然在明细里单列，但它已被 LS 注入进 prompt、
+    //   包含在 modelUsage 的 input / cacheRead 里 —— 再画一段就是重复计入，
+    //   表现为「进度条各段加起来 ≠ 百分比」，会让人以为是两套口径。
     var segs = [
       [CONV.cacheRead, C.conv],
       [Math.max(0, CONV.input - CONV.cacheRead), C.sys],
       [CONV.output, C.tool],
       [CONV.est, C.tool],
-      [BUDGET.total, C.rule],
     ];
     var bar = '';
     var denom = m.limit || 1;
@@ -840,7 +848,7 @@
       rows = row('系统提示词', SYS_PROMPT_OVERHEAD, C.sys)
         + row('工具与响应（估算）', Math.max(0, CONV.est - SYS_PROMPT_OVERHEAD), C.tool);
     }
-    if (BUDGET.total) rows += row('Rules / Skills', BUDGET.total, C.rule);
+    if (BUDGET.total) rows += row('Rules / Skills（已计入）', BUDGET.total, C.rule);
 
     // 底注：来源标记 + 剩余 + 会话/模型 + 步数，全部压进两行
     var foot;

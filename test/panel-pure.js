@@ -64,6 +64,7 @@ for (const [name, chunk] of [
 }
 assert.ok(/var M = \{/.test(consts), '常量段缺 M');
 assert.ok(/function limitOf/.test(helpers), 'helpers 段缺 limitOf');
+assert.ok(/function tailSteps/.test(helpers), 'helpers 段缺 tailSteps');
 assert.ok(/function computeUsageFromSteps/.test(usage), 'usage 段缺 computeUsageFromSteps');
 
 // —— 在沙箱里求值 ——
@@ -74,6 +75,7 @@ const src = `
   ${usage}
   __EXPORT__.limitOf = limitOf;
   __EXPORT__.nameOf = nameOf;
+  __EXPORT__.tailSteps = tailSteps;
   __EXPORT__.usageOf = usageOf;
   __EXPORT__.computeUsageFromSteps = computeUsageFromSteps;
   __EXPORT__.M = M;
@@ -81,8 +83,8 @@ const src = `
 
 const P = {};
 const names = ['LABELS', 'EST_OVERHEAD', 'SYS_PROMPT_OVERHEAD', 'USER_INPUT_FALLBACK',
-  'PLANNER_FALLBACK', 'COMPRESS_MIN_DROP', 'MAX_STEPS', 'BATCH', 'CONCURRENCY'];
-const vals = [undefined, 0, 10000, 500, 800, 5000, 2000, 50, 5];
+  'PLANNER_FALLBACK', 'COMPRESS_MIN_DROP', 'MAX_STEPS'];
+const vals = [undefined, 0, 10000, 500, 800, 5000, 2000];
 new Function(...names, '__EXPORT__', src)(...vals, P);
 
 let passed = 0, failed = 0;
@@ -180,6 +182,42 @@ test('压缩检测：跌幅 > 5000 才判压缩', () => {
     metadata: { modelUsage: { model: 'M', inputTokens: String(ctx), outputTokens: '1' } } });
   assert.strictEqual(P.computeUsageFromSteps([mk(100000), mk(50000)], '').compressed, true);
   assert.strictEqual(P.computeUsageFromSteps([mk(100000), mk(98000)], '').compressed, false);
+});
+
+// ---------- tailSteps（★ 防「重复拉取 → 伪造压缩」回归） ----------
+console.log('\ntailSteps 截尾');
+
+test('超过上限时只保留尾部（要的是最新用量，不是最早的）', () => {
+  assert.deepStrictEqual(P.tailSteps([1, 2, 3, 4, 5], 2), [4, 5]);
+  assert.deepStrictEqual(P.tailSteps([1, 2, 3], 3), [1, 2, 3]);
+  assert.deepStrictEqual(P.tailSteps([1, 2, 3], 99), [1, 2, 3]);
+});
+
+test('非数组 / 空值安全', () => {
+  assert.deepStrictEqual(P.tailSteps(null, 3), []);
+  assert.deepStrictEqual(P.tailSteps(undefined, 3), []);
+  assert.deepStrictEqual(P.tailSteps([], 3), []);
+});
+
+test('maxSteps 非法时退回常量上限（不误截）', () => {
+  assert.deepStrictEqual(P.tailSteps([1, 2, 3], 0), [1, 2, 3]);
+  assert.deepStrictEqual(P.tailSteps([1, 2, 3], -1), [1, 2, 3]);
+  assert.deepStrictEqual(P.tailSteps([1, 2, 3]), [1, 2, 3]);
+});
+
+test('★ 重复的全量副本回绕会伪造压缩判定（说明为何必须在取数层去重）', () => {
+  const one = [
+    { type: 'CORTEX_STEP_TYPE_PLANNER_RESPONSE',
+      metadata: { modelUsage: { model: 'M', inputTokens: '15000', outputTokens: '100' } } },
+    { type: 'CORTEX_STEP_TYPE_PLANNER_RESPONSE',
+      metadata: { modelUsage: { model: 'M', inputTokens: '0', cacheReadTokens: '33000', outputTokens: '100' } } },
+  ];
+  // 单份：单调递增，不该判压缩
+  assert.strictEqual(P.computeUsageFromSteps(one, '').compressed, false);
+  // 两份拼接：尾 33100 → 首 15100，落差 18000 > 5000 → 伪造出压缩
+  assert.strictEqual(P.computeUsageFromSteps(one.concat(one), '').compressed, true);
+  // 截尾到只剩一份，判定恢复正确
+  assert.strictEqual(P.computeUsageFromSteps(P.tailSteps(one.concat(one), 2), '').compressed, false);
 });
 
 test('usage 后的工具输出与估算增量计入 used', () => {
