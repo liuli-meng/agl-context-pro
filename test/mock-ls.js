@@ -66,29 +66,31 @@ const trajectories = {
   },
 };
 
-// 9 步序列：3 个 checkpoint，中间发生过一次压缩（68000 → 52000，降 16000）
-// 最后用量 = 80000 input + 2100 output；模型 gemini-3.8-flash-high → 上限 256000
+// 9 步序列，modelUsage 挂在 PLANNER_RESPONSE 上（2026-10-02 实测的真实形态，
+// 该会话 520 个 PLANNER_RESPONSE 全带用量、CHECKPOINT 一个都不带）。
+// 中间发生过一次压缩：缓存归零、新增输入顶上（69800 → 53500，降 16300）。
+// 末次用量 = 3211 + 76689 + 2100 = 82000；模型 gemini-3.8-flash-high → 上限 256000
 const steps = [
   { type: 'CORTEX_STEP_TYPE_USER_INPUT', metadata: {} },
   { type: 'CORTEX_STEP_TYPE_PLANNER_RESPONSE', metadata: {} },
   {
-    type: 'CORTEX_STEP_TYPE_CHECKPOINT',
-    metadata: { modelUsage: { model: 'gemini-3.8-flash-high', inputTokens: '30000', outputTokens: '1200', cacheReadTokens: '0' } },
+    type: 'CORTEX_STEP_TYPE_PLANNER_RESPONSE',
+    metadata: { modelUsage: { model: 'gemini-3.8-flash-high', inputTokens: '3000', cacheReadTokens: '27000', outputTokens: '1200' } },
   },
   { type: 'CORTEX_STEP_TYPE_TOOL_CALL', metadata: { toolCallOutputTokens: 350 } },
   {
-    type: 'CORTEX_STEP_TYPE_CHECKPOINT',
-    metadata: { modelUsage: { model: 'gemini-3.8-flash-high', inputTokens: '68000', outputTokens: '1800', cacheReadTokens: '0' } },
+    type: 'CORTEX_STEP_TYPE_PLANNER_RESPONSE',
+    metadata: { modelUsage: { model: 'gemini-3.8-flash-high', inputTokens: '4200', cacheReadTokens: '63800', outputTokens: '1800' } },
   },
-  // 压缩后回落
+  // 压缩后回落：cacheRead 归 0，新增输入顶上
   {
-    type: 'CORTEX_STEP_TYPE_CHECKPOINT',
-    metadata: { modelUsage: { model: 'gemini-3.8-flash-high', inputTokens: '52000', outputTokens: '1500', cacheReadTokens: '0' } },
+    type: 'CORTEX_STEP_TYPE_PLANNER_RESPONSE',
+    metadata: { modelUsage: { model: 'gemini-3.8-flash-high', inputTokens: '52000', cacheReadTokens: '0', outputTokens: '1500' } },
   },
   { type: 'CORTEX_STEP_TYPE_TOOL_CALL', metadata: { toolCallOutputTokens: 120 } },
   {
-    type: 'CORTEX_STEP_TYPE_CHECKPOINT',
-    metadata: { modelUsage: { model: 'gemini-3.8-flash-high', inputTokens: '80000', outputTokens: '2100', cacheReadTokens: '0' } },
+    type: 'CORTEX_STEP_TYPE_PLANNER_RESPONSE',
+    metadata: { modelUsage: { model: 'gemini-3.8-flash-high', inputTokens: '3211', cacheReadTokens: '76689', outputTokens: '2100' } },
   },
   { type: 'CORTEX_STEP_TYPE_USER_INPUT', metadata: {} },
 ];

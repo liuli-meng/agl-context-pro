@@ -124,8 +124,9 @@ function render(ctx, conv, quota) {
     md.appendMarkdown(`${c.summary}\n\n`);
     md.appendMarkdown(`${c.used} / ${c.limit} tokens（**${c.percent.toFixed(1)}%**）`
       + ` · 模型 \`${c.model || '?'}\`\n\n`);
-    md.appendMarkdown(`checkpoints ${c.checkpoints} · input ${c.inputTokens}`
-      + ` + output ${c.outputTokens} + 工具输出≈${c.toolOutputTokens}\n\n`);
+    md.appendMarkdown(`用量步 ${c.usageSteps} · 新增输入 ${c.inputTokens}`
+      + ` + 缓存命中 ${c.cacheReadTokens} + 输出 ${c.outputTokens}`
+      + ` + 工具输出≈${c.toolOutputTokens}\n\n`);
     if (c.compressed) {
       md.appendMarkdown(`ℹ 已发生自动压缩（上下文回落 ${lsclient.fmtNum(c.compressionDrop)} tokens）\n\n`);
     }
@@ -201,8 +202,9 @@ async function showDetail() {
     items.push({
       label: `$(comment-discussion) 对话：${c.summary}`,
       description: `${c.used} / ${c.limit}（${c.percent.toFixed(1)}%）`,
-      detail: `模型 ${c.model || '?'} · checkpoints ${c.checkpoints}`
-        + ` · input ${c.inputTokens} + output ${c.outputTokens} + 工具输出≈${c.toolOutputTokens}`
+      detail: `模型 ${c.model || '?'} · 用量步 ${c.usageSteps}`
+        + ` · 新增输入 ${c.inputTokens} + 缓存命中 ${c.cacheReadTokens}`
+        + ` + 输出 ${c.outputTokens} + 工具输出≈${c.toolOutputTokens}`
         + (c.compressed ? ` · ⚠已压缩（回落 ${c.compressionDrop}）` : ''),
     });
     for (const o of conv.others) {
@@ -276,9 +278,9 @@ function renderPlainText(ctx, conv) {
     lines.push('');
     lines.push(`当前对话: ${c.summary}`);
     lines.push(`  ${c.used} / ${c.limit} tokens (${c.percent.toFixed(1)}%)`
-      + ` · 模型 ${c.model || '?'} · checkpoints ${c.checkpoints}`);
-    lines.push(`  input ${c.inputTokens} + output ${c.outputTokens}`
-      + ` + 工具输出≈${c.toolOutputTokens}`
+      + ` · 模型 ${c.model || '?'} · 用量步 ${c.usageSteps}`);
+    lines.push(`  新增输入 ${c.inputTokens} + 缓存命中 ${c.cacheReadTokens}`
+      + ` + 输出 ${c.outputTokens} + 工具输出≈${c.toolOutputTokens}`
       + (c.compressed ? ` · ⚠已压缩（回落 ${c.compressionDrop}）` : ''));
     for (const o of conv.others) {
       lines.push(`  - ${o.summary} (${o.status}, ${o.stepCount} 步)`);

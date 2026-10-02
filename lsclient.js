@@ -24,7 +24,15 @@ const APPDIR_RE = /--app_data_dir[= ]+(\S+)/;
 
 // 对话级用量相关（逆向自官方 trajectory 结构）
 const STEP_TYPE_CHECKPOINT = 'CORTEX_STEP_TYPE_CHECKPOINT';
-const COMPRESSION_MIN_DROP = 5000; // 相邻 checkpoint input 下降超此值判定发生过压缩
+const STEP_TYPE_PLANNER = 'CORTEX_STEP_TYPE_PLANNER_RESPONSE';
+
+// ⚠ 2026-10-02 实测：modelUsage 挂在 PLANNER_RESPONSE 步上，CHECKPOINT 步
+//   可能一个都不带（该会话 1049 步：520 个 PLANNER_RESPONSE 全带用量，
+//   2 个 CHECKPOINT 都不带）。只认 CHECKPOINT 会让对话用量恒为 0 —— 
+//   状态栏的对话段会永远不显示。两个类型都认。
+const STEP_TYPES_WITH_USAGE = [STEP_TYPE_PLANNER, STEP_TYPE_CHECKPOINT];
+
+const COMPRESSION_MIN_DROP = 5000; // 相邻用量上下文总量下降超此值判定发生过压缩
 const STEP_TAIL = 400;             // 只拉会话尾部 400 步：覆盖用量 + 压缩检测，避免大会话拖慢轮询
 
 // ---------------------------------------------------------------- 基础工具
@@ -256,36 +264,57 @@ function parseTrajectories(summaries) {
   }).sort((a, b) => (b.lastModifiedTime || '').localeCompare(a.lastModifiedTime || ''));
 }
 
+/**
+ * 本地截尾。
+ *
+ * ⚠ 实测（2026-10-02，Antigravity 2.19.1）：`GetCascadeTrajectorySteps`
+ *   **忽略 startIndex / endIndex** —— 请求 `[1039,1049]` 回来的仍是完整 1049 条，
+ *   所以下面那个 start/endIndex 只是「万一将来支持」的保险，别指望它省流量。
+ *   上万步的大会话每 5 秒全量遍历纯属浪费，这里在本地只留尾部 STEP_TAIL 步：
+ *   取最新 modelUsage、做近段压缩检测都够用。
+ */
+function tailSteps(steps, cap) {
+  const arr = Array.isArray(steps) ? steps : [];
+  const n = cap > 0 ? cap : STEP_TAIL;
+  return arr.length > n ? arr.slice(arr.length - n) : arr;
+}
+
 /** 解析 steps 数组 → 对话用量（纯函数，可测） */
 function parseConversationSteps(steps) {
   let lastUsage = null;
-  let prevInput = -1;
+  let prevCtx = -1;
   let compressed = false;
   let compressionDrop = 0;
-  let checkpointCount = 0;
+  let usageSteps = 0;
   let toolOutputTokens = 0;
   for (const step of steps || []) {
     const type = step.type || '';
     const meta = step.metadata || {};
-    if (type === STEP_TYPE_CHECKPOINT) {
+    if (STEP_TYPES_WITH_USAGE.includes(type)) {
       const mu = meta.modelUsage;
       if (mu) {
         const inputTokens = parseInt(String(mu.inputTokens || '0'), 10) || 0;
+        const cacheReadTokens = parseInt(String(mu.cacheReadTokens || '0'), 10) || 0;
         const outputTokens = parseInt(String(mu.outputTokens || '0'), 10) || 0;
-        if (prevInput > 0 && inputTokens < prevInput
-            && (prevInput - inputTokens) > COMPRESSION_MIN_DROP) {
-          compressed = true;
-          compressionDrop = prevInput - inputTokens;
+        // 真实上下文 = 未命中的新增输入 + 命中的缓存部分 + 本轮输出
+        // （inputTokens 单独一个数只是「本轮增量」，不是上下文规模）
+        const ctx = inputTokens + cacheReadTokens + outputTokens;
+        if (ctx > 0) {
+          if (prevCtx > 0 && ctx < prevCtx
+              && (prevCtx - ctx) > COMPRESSION_MIN_DROP) {
+            compressed = true;
+            compressionDrop = prevCtx - ctx;
+          }
+          prevCtx = ctx;
+          lastUsage = { inputTokens, cacheReadTokens, outputTokens, ctx, model: mu.model || '' };
+          usageSteps++;
         }
-        prevInput = inputTokens;
-        lastUsage = { inputTokens, outputTokens, model: mu.model || '' };
-        checkpointCount++;
       }
     } else if (meta.toolCallOutputTokens) {
       toolOutputTokens += meta.toolCallOutputTokens;
     }
   }
-  return { lastUsage, compressed, compressionDrop, checkpointCount, toolOutputTokens };
+  return { lastUsage, compressed, compressionDrop, usageSteps, toolOutputTokens };
 }
 
 /**
@@ -325,6 +354,7 @@ async function getConversation() {
   const cur = convs[0];
   let stepsResp;
   try {
+    // start/endIndex 会被 LS 忽略（见 tailSteps 注释），真正生效的是本地截尾
     const start = Math.max(0, cur.stepCount - STEP_TAIL);
     stepsResp = await rpc(s.port, s.csrf, 'GetCascadeTrajectorySteps',
       { cascadeId: cur.cascadeId, startIndex: start, endIndex: cur.stepCount }, 15000);
@@ -332,12 +362,15 @@ async function getConversation() {
     return { ok: false, error: 'GetCascadeTrajectorySteps: ' + String(e.message || e) };
   }
 
-  const p = parseConversationSteps((stepsResp && stepsResp.steps) || []);
+  const p = parseConversationSteps(tailSteps((stepsResp && stepsResp.steps) || []));
   const model = (p.lastUsage && p.lastUsage.model) ? p.lastUsage.model : cur.model;
   const limit = guessContextLimit(model);
   const inputTokens = p.lastUsage ? p.lastUsage.inputTokens : 0;
+  const cacheReadTokens = p.lastUsage ? p.lastUsage.cacheReadTokens : 0;
   const outputTokens = p.lastUsage ? p.lastUsage.outputTokens : 0;
-  const used = inputTokens + outputTokens;
+  // ⚠ 口径必须与桌面版面板、托盘版一致：真实上下文 = 新增输入 + 缓存命中 + 本轮输出。
+  //   漏掉 cacheReadTokens 会把上下文规模低估一个数量级（实测 4.9K vs 33.5K）。
+  const used = inputTokens + cacheReadTokens + outputTokens;
 
   return {
     ok: true,
@@ -351,8 +384,12 @@ async function getConversation() {
       used,
       limit,
       percent: limit ? (100.0 * used / limit) : 0,
-      checkpoints: p.checkpointCount,
+      // 语义已从「checkpoint 数量」改为「带用量的步数」（旧的恒为 0）；
+      // usageSteps 是新名字，checkpoints 保留给老调用方
+      checkpoints: p.usageSteps,
+      usageSteps: p.usageSteps,
       inputTokens,
+      cacheReadTokens,
       outputTokens,
       toolOutputTokens: p.toolOutputTokens,
       compressed: p.compressed,
@@ -443,7 +480,7 @@ function statusDot(percent) {
 
 module.exports = {
   getContext, getConversation, getUserStatus, discover, rpc,
-  parseTrajectories, parseConversationSteps, guessContextLimit,
+  parseTrajectories, parseConversationSteps, tailSteps, guessContextLimit,
   fmtNum, statusDot, SERVICE,
 };
 

@@ -63,18 +63,40 @@ function test(name, fn) {
     assert.strictEqual(convs[1].cascadeId, 'conv-1');
   });
 
-  await test('parseConversationSteps：末 checkpoint 用量 + 压缩检测 + 工具输出', () => {
+  await test('parseConversationSteps：PLANNER_RESPONSE 用量 + 压缩 + 工具输出', () => {
+    // 真实形态：modelUsage 挂在 PLANNER_RESPONSE 上，CHECKPOINT 一个都不带
     const p = lsclient.parseConversationSteps([
-      { type: 'CORTEX_STEP_TYPE_CHECKPOINT', metadata: { modelUsage: { model: 'm', inputTokens: '68000', outputTokens: '1800' } } },
+      { type: 'CORTEX_STEP_TYPE_PLANNER_RESPONSE', metadata: { modelUsage: { model: 'm', inputTokens: '3000', cacheReadTokens: '27000', outputTokens: '1200' } } },
       { type: 'CORTEX_STEP_TYPE_TOOL_CALL', metadata: { toolCallOutputTokens: 120 } },
-      { type: 'CORTEX_STEP_TYPE_CHECKPOINT', metadata: { modelUsage: { model: 'm', inputTokens: '52000', outputTokens: '1500' } } },
-      { type: 'CORTEX_STEP_TYPE_CHECKPOINT', metadata: { modelUsage: { model: 'm', inputTokens: '80000', outputTokens: '2100' } } },
+      { type: 'CORTEX_STEP_TYPE_PLANNER_RESPONSE', metadata: { modelUsage: { model: 'm', inputTokens: '4200', cacheReadTokens: '63800', outputTokens: '1800' } } },
+      // 压缩点：缓存归零，总数 69800 → 53500
+      { type: 'CORTEX_STEP_TYPE_PLANNER_RESPONSE', metadata: { modelUsage: { model: 'm', inputTokens: '52000', cacheReadTokens: '0', outputTokens: '1500' } } },
+      { type: 'CORTEX_STEP_TYPE_PLANNER_RESPONSE', metadata: { modelUsage: { model: 'm', inputTokens: '3211', cacheReadTokens: '76689', outputTokens: '2100' } } },
     ]);
-    assert.strictEqual(p.checkpointCount, 3);
-    assert.strictEqual(p.lastUsage.inputTokens, 80000);
+    assert.strictEqual(p.usageSteps, 4);
+    assert.strictEqual(p.lastUsage.inputTokens, 3211);
+    assert.strictEqual(p.lastUsage.cacheReadTokens, 76689);
+    assert.strictEqual(p.lastUsage.ctx, 3211 + 76689 + 2100);
     assert.strictEqual(p.compressed, true);
-    assert.strictEqual(p.compressionDrop, 16000);
+    assert.strictEqual(p.compressionDrop, 16300);
     assert.strictEqual(p.toolOutputTokens, 120);
+  });
+
+  await test('parseConversationSteps：CHECKPOINT 形态仍然兼容', () => {
+    const p = lsclient.parseConversationSteps([
+      { type: 'CORTEX_STEP_TYPE_CHECKPOINT', metadata: { modelUsage: { model: 'm', inputTokens: '1000', cacheReadTokens: '9000', outputTokens: '50' } } },
+    ]);
+    assert.strictEqual(p.usageSteps, 1);
+    assert.strictEqual(p.lastUsage.ctx, 10050);
+    assert.strictEqual(p.compressed, false);
+  });
+
+  await test('tailSteps：本地截尾只保留最新 N 步', () => {
+    // LS 忽略 startIndex/endIndex，永远返回全量；截尾防止大会话每轮全量遍历
+    const arr = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+    assert.deepStrictEqual(lsclient.tailSteps(arr, 3), [8, 9, 10]);
+    assert.deepStrictEqual(lsclient.tailSteps(arr, 99), arr);
+    assert.deepStrictEqual(lsclient.tailSteps(null, 3), []);
   });
 
   console.log('\nE2E（mock LS 全链路）');
@@ -91,17 +113,20 @@ function test(name, fn) {
     assert.strictEqual(ctx2.truncated, true); // mock 第 2 次返回已截断
   });
 
-  await test('getConversation：最新会话用量 82100/256000 + 压缩 + 会话列表', async () => {
+  await test('getConversation：真实上下文 = 新增 + 缓存命中 + 输出', async () => {
     const conv = await lsclient.getConversation();
     assert.ok(conv.ok);
     const c = conv.conversation;
     assert.strictEqual(c.cascadeId, 'conv-2-aaaa');
-    assert.strictEqual(c.model, 'gemini-3.8-flash-high'); // checkpoint 的 modelUsage.model 优先
-    assert.strictEqual(c.used, 80000 + 2100);
+    assert.strictEqual(c.model, 'gemini-3.8-flash-high'); // PLANNER_RESPONSE 的 modelUsage.model 优先
+    // 曾漏掉 cacheReadTokens，会把 82000 低估成 5311
+    assert.strictEqual(c.used, 3211 + 76689 + 2100);
     assert.strictEqual(c.limit, 256000);
-    assert.strictEqual(c.checkpoints, 4);
+    assert.strictEqual(c.cacheReadTokens, 76689);
+    assert.strictEqual(c.usageSteps, 4);
+    assert.strictEqual(c.checkpoints, 4); // 兼容字段，语义同 usageSteps
     assert.strictEqual(c.compressed, true);
-    assert.strictEqual(c.compressionDrop, 16000);
+    assert.strictEqual(c.compressionDrop, 16300);
     assert.strictEqual(c.toolOutputTokens, 350 + 120);
     assert.strictEqual(conv.others.length, 1);
     assert.strictEqual(conv.others[0].cascadeId, 'conv-1-bbbb');
