@@ -181,7 +181,12 @@ tokens = ceil(asciiChars / 4 + nonAsciiChars / 1.5)
    （实测 2721 vs 真实 194K）。这是最初「面板数字太小」的根因。
 3. **不能逐轮累加 usage**：`inputTokens/cacheReadTokens` 已经是累计前缀，
    累加会指数爆炸。只取**最后一条**，再加尾部的增量。
-4. **必须拉全部步骤**：usage 可能出现在中段，只取尾部会漏。分批 50、5 并发拉完 `stepCount` 条。
+4. **`GetCascadeTrajectorySteps` 忽略 `startIndex`/`endIndex`** —— 不管请求哪个区间，
+   回来的都是整个会话。实证：`[0,10]`、`[500,600]`、`[1000,1010]`、`[1039,1049]`
+   四次调用全部返回完整 1049 条。
+   ⚠ 曾经按「分批 50、5 并发」拉，以为能拿全 —— 实际是 **21 份全量副本 = 22029 条**：
+   每 5 秒白拉 20 倍数据，序列回绕（尾 33.5K 掉回首 15.3K）还会**伪造出「已压缩」告警**。
+   正解：**只调用一次**，大会话在本地截尾（`tailSteps`）。
 
 其他坑：
 
@@ -222,7 +227,7 @@ tokens = ceil(asciiChars / 4 + nonAsciiChars / 1.5)
 **jsdom 覆盖三条路径**：
 
 - 真实形态（`modelUsage` 在 `PLANNER_RESPONSE`，末步 `cacheRead=191.6K`）→ `19% ~194K`
-- 长会话 260 步（验证分批拉取）
+- 长会话 260 步（验证全量返回 + 本地截尾）
 - 无会话（显示「还没有对话」，不虚报）
 
 ## 致谢
@@ -230,6 +235,6 @@ tokens = ceil(asciiChars / 4 + nonAsciiChars / 1.5)
 算法参考这两个开源实现，特此注明：
 
 - [AGI-is-going-to-arrive/Antigravity-Context-Window-Monitor](https://github.com/AGI-is-going-to-arrive/Antigravity-Context-Window-Monitor)
-  —— 字符估算公式、压缩检测阈值、分批拉取思路
+  —— 字符估算公式、压缩检测阈值、单次拉取 + 尾部截断思路
 - [daluoxiaojun/antigravity-context-window-monitor-win](https://github.com/daluoxiaojun/antigravity-context-window-monitor-win)
   —— 窗口上限映射表（Gemini 1M / Claude 200K / GPT-OSS 128K）、会话选择优先级

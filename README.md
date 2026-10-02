@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/liuli-meng/agl-context-pro/actions/workflows/ci.yml/badge.svg)](https://github.com/liuli-meng/agl-context-pro/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.3.0-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.3.1-blue.svg)](CHANGELOG.md)
 
 Antigravity IDE 的上下文用量三重监控扩展：状态栏同时显示 **① 预算占用**、**② 当前对话用量** 和 **③ 官方额度**，纯 Node 实现、零 npm 依赖、无编译步骤。
 
@@ -44,8 +44,10 @@ Antigravity IDE 的上下文用量三重监控扩展：状态栏同时显示 **�
 │   → 取最近修改的会话 → GetCascadeTrajectorySteps         │
 │   → 末个 PLANNER_RESPONSE 的 modelUsage 即当前用量       │
 │     （⚠ 挂在该步，不在 CHECKPOINT 步）                   │
-│   → 真实上下文 = inputTokens + cacheReadTokens           │
-│   → 相邻用量骤降 >20000 判定发生过压缩                  │
+│   → 真实上下文 = inputTokens + cacheReadTokens + output  │
+│   → ⚠ GetCascadeTrajectorySteps 忽略 startIndex/endIndex │
+│     一律返回整个会话 → 客户端本地截尾，防重复拉取         │
+│   → 相邻用量骤降 >5000 判定发生过压缩                    │
 └──────────────────────────────────────────────────┘
 ```
 
@@ -126,6 +128,7 @@ openssl req -x509 -newkey rsa:2048 -keyout test/key.pem -out test/cert.pem \
 
 - Antigravity（桌面版或 IDE）未启动时显示「未连接」，启动后自动重连
 - 同时开桌面版和 IDE 时连接先探活成功的那个（两者配置同源，预算数值一致；对话会话归属各自实例）
+- `GetCascadeTrajectorySteps` **忽略 `startIndex` / `endIndex`**，任何区间都返回整个会话（2.19.1 实测：请求 `[1039,1049]` 仍回 1049 条）—— 没法靠服务端分页省流量，大会话只能客户端本地截尾
 - `engines.vscode: ^1.85.0`，实测 Antigravity IDE 1.107.0 可用；未在 VS Code / Cursor 等其他 IDE 测试
 - Windows 专用实现（PowerShell CIM + netstat），Linux/macOS 未适配（PR 欢迎改用 `ps` 探测）
 

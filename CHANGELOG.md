@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.3.1 — 2026-10-02
+
+### 修复
+
+- **对话用量口径漏掉缓存命中**：真实上下文改为 `inputTokens + cacheReadTokens + outputTokens`。
+  旧实现只算 `input + output`，启用 prompt 缓存后会低估一个数量级
+  （实测同一会话：5.3K vs 82K）。
+- **对话用量恒为 0**：实测 `modelUsage` 挂在 `PLANNER_RESPONSE` 步上
+  （该会话 1049 步：520 个 PLANNER_RESPONSE 全带用量，2 个 CHECKPOINT 一个都不带），
+  而解析只认 `CHECKPOINT` → 状态栏的对话段永远不显示。改为两种类型都认。
+- **取步接口忽略区间导致 21 倍重复拉取**：`GetCascadeTrajectorySteps` 忽略
+  `startIndex`/`endIndex`，任何区间都返回整个会话（实测请求 `[1039,1049]` 仍回 1049 条）。
+  桌面版面板曾按 50 一批分批拉 → 拿到 **21 份全量副本（1049 步 → 22029 条）**：
+  每 5 秒白拉 20 倍数据，序列回绕（尾 33.5K 掉回首 15.3K）还会**伪造「已压缩」告警**。
+  改为单次调用 + 本地尾部截断。
+- **进度条与百分比对不上**：`Rules / Skills` 已被 LS 注入进 prompt、包含在 `modelUsage`
+  里，进度条再画一段属重复计入。移除该段，明细行标注「已计入」。
+
+### 变更
+
+- 状态栏 / 明细文案：`checkpoints N · input X + output Y`
+  → `用量步 N · 新增输入 X + 缓存命中 Y + 输出 Z`
+- `conversation` 新增 `cacheReadTokens` / `usageSteps` 字段（`checkpoints` 保留兼容）
+- 新增 `tailSteps()`：本地截尾，防大会话刷新时全量遍历
+- 新增 `tools/verify-inject.js`：注入后校验 preload 内容与标记唯一性
+
+### 测试
+
+- 24 条（9 E2E + 15 纯函数）。新补：`PLANNER_RESPONSE` 形态、`cacheReadTokens` 计入 `used`、
+  `tailSteps` 截尾、以及「重复副本回绕会伪造压缩判定」的回归锁。
+
 ## 0.3.0 — 2026-10-01
 
 ### 新增
