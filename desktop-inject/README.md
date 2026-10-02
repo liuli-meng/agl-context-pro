@@ -28,7 +28,10 @@ node inject.js install
 node inject.js uninstall
 ```
 
-注入后**重启 Antigravity** 生效。
+注入后**只做一件事：完全退出 Antigravity 再重新打开**（点桌面快捷方式即可，不用管代理）。
+preload 在页面加载前执行，所以必须重启才生效。
+
+node 用 `C:\Users\<user>\.workbuddy\binaries\node\versions\22.22.2-3\node.exe`。
 
 ## 数据来源
 
