@@ -21,3 +21,6 @@ desktop-inject/__pycache__/
 
 # 本机归档（旧副本，不入库）
 _archive/
+
+# 工作区本地记忆（含本机路径等，不入库）
+.workbuddy/
