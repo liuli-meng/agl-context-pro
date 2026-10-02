@@ -107,6 +107,37 @@ Content-Type: application/json
 
 token 在应用生命周期内不变（每次启动应用重新生成），401 时清空重取。
 
+### ⚠ 大坑：contextIsolation 下「直读全局」是读不到的
+
+**Antigravity 开了 `contextIsolation`**，preload 跑在 **Electron Isolated Context**，
+而 `__APP_CONFIG__` 挂在 **主世界**。两者共享 DOM，但 **window 对象互不可见**。
+
+CDP 实测（Antigravity 2.19.1，同一时刻对照）：
+
+| 执行上下文 | `__APP_CONFIG__` | cookie | localStorage | 同一条 `GetTokenBase` |
+|---|---|---|---|---|
+| `default`（主世界） | ✅ `csrfLen=36` | — | — | ✅ `200 len=855` |
+| `Electron Isolated Context`（preload 所在） | ❌ `NO_CONFIG` | 空 | 无 token | ❌ `401 missing CSRF token` |
+
+**踩过的坑**：旧版 `sniffCsrf()` 只是 hook 自己（隔离世界）的 `fetch` / `XHR` —— 
+但页面的真实请求发生在主世界，**根本 hook 不到**；「直读全局」又跨不过世界边界。
+两条路都是死的 → 所有 RPC 401 → 面板永远停在「数据获取中… / 等待 Antigravity 响应…」。
+
+**解法：用 DOM 搭桥**（DOM 是两个世界唯一的共享面）
+往主世界注入一个 `<script>`，让它读 `__APP_CONFIG__.csrfToken` 并写到
+`<html data-agl-csrf="…">`，隔离世界再从这个属性读回来。三级兜底：
+
+1. **DOM 桥**（`installMainWorldBridge()`）—— 主世界注入，主力方案
+2. **直读全局**（`readCsrfFromGlobal()`）—— 万一某版本关掉了隔离
+3. **hook fetch/XHR** —— 老兜底，留着无害
+
+桥是异步的（`<script>` 要一拍才执行），所以 `waitCsrfAndRefresh()` 轮询 25 次 × 300ms。
+
+> 排查这类问题的通用手法：用 CDP `Runtime.enable` 枚举 `executionContextCreated`，
+> 然后在**每个 context 里分别求值**对比 —— 一眼就能看出是不是被隔离世界坑了。
+> 注意 CDP 的 WS 连接会被拒（403），需要 `suppress_origin=True` 或
+> `--remote-allow-origins`。
+
 ## 数据来源
 
 | 面板项 | RPC / 来源 | 说明 |
