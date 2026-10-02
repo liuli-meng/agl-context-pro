@@ -347,6 +347,11 @@
     var toolSinceUsage = 0;
     var model = initialModel || '';
     var last = null;
+    // ★ 模型名单独跟踪：只有「真的带了 modelUsage 的步」才有资格更新它。
+    //   否则末次 usage 之后的无关步骤（带个 generatorModel 但没有用量）
+    //   会把真实模型冲掉 —— 实测该会话 1478 步里有上千步是这种噪音，
+    //   会导致模型名在 M26/M318 之间乱跳、分母（200K/1M）跟着乱变。
+    var modelFromUsage = '';
     var prevCtx = -1;
     var compressed = false;
 
@@ -382,13 +387,21 @@
       totalToolOut += tco;
       toolSinceUsage += tco;
 
-      if (md.generatorModel) model = md.generatorModel;
-      if (md.requestedModel && md.requestedModel.model) model = md.requestedModel.model;
+      // ⚠ 模型名的更新规则（顺序很重要）：
+      //   ① requestedModel 是「用户选的那个」，比 generatorModel 权威 —— 先写
+      //   ② generatorModel 是「实际跑的那个」，只在 requestedModel 缺失时兜底
+      //   ③ 但这两个都只能作为「本轮快照」，最终以最后一次 usage 的模型为准（见下）
+      if (md.requestedModel && md.requestedModel.model) {
+        model = md.requestedModel.model;
+      } else if (md.generatorModel) {
+        model = md.generatorModel;
+      }
 
       // ⚠ 两个类型都认：新版在 PLANNER_RESPONSE，别的在 CHECKPOINT
       var u = usageOf(md.modelUsage);
       if (u) {
-        if (u.model) model = u.model;
+        // 带用量的步才是「权威模型」—— 记下来，循环结束后优先用它
+        if (u.model) modelFromUsage = u.model;
         if (prevCtx > 0 && u.ctx < prevCtx && (prevCtx - u.ctx) > COMPRESS_MIN_DROP) {
           compressed = true;
         }
@@ -399,6 +412,9 @@
       }
     }
 
+    // ★ 定案：有权威模型就用它，否则退回上面扫到的快照（与 lsclient.js 口径一致）
+    var finalModel = modelFromUsage || model;
+
     if (last) {
       var delta = toolSinceUsage + estOverhead;
       return {
@@ -406,7 +422,7 @@
         input: last.input + last.cacheRead,
         cacheRead: last.cacheRead,
         output: last.output, est: delta,
-        model: model, hasCkpt: true, compressed: compressed,
+        model: finalModel, hasCkpt: true, compressed: compressed,
         src: delta > 0 ? 'mixed' : 'api',
       };
     }
@@ -414,7 +430,7 @@
     var total = SYS_PROMPT_OVERHEAD + totalToolOut + estOverhead;
     return {
       used: total, input: 0, cacheRead: 0, output: 0, est: total,
-      model: model, hasCkpt: false, compressed: false, src: 'estimate',
+      model: finalModel, hasCkpt: false, compressed: false, src: 'estimate',
     };
   }
 
