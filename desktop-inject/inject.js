@@ -21,6 +21,22 @@ const PrecisionPatcher = require('./precision-patcher');
 const MARK_START = '/* === [START] Antigravity 上下文用量悬浮面板 === */';
 const MARK_END = '/* === [END] Antigravity 上下文用量悬浮面板 === */';
 
+/**
+ * 清掉 preload.js 里所有已注入的插件块。
+ *
+ * 为什么用宽松规则而不是 MARK_START/MARK_END 精确匹配：
+ *   历史上 theme.js 用过带后缀的变体标记（`… 悬浮面板 · 设计 token 层 === *​/`），
+ *   它不匹配 MARK_*，导致旧块清不掉、重复 install 层层叠加。
+ *   这条规则把「有后缀 / 无后缀」两种写法一起吃。
+ *
+ * 为什么只 replace 一次而不是循环到稳定：
+ *   `[\s\S]*?` 是非贪婪的，一次 replace 就吃完一整块；循环反而会在
+ *   块被清空成 `START\n\n\nEND` 空壳后继续吞掉它 —— 没必要，也不安全。
+ *   `/g` 本身已能处理文件里存在多块的情况。
+ */
+const ANY_BLOCK_RE =
+  /\/\* === \[START\] Antigravity 上下文用量悬浮面板[^=]*=== \*\/[\s\S]*?\/\* === \[END\] Antigravity 上下文用量悬浮面板[^=]*=== \*\//g;
+
 const CANDIDATES = [
   'D:\\Antigravity\\app\\resources\\app.asar',
   process.env.LOCALAPPDATA
@@ -65,11 +81,15 @@ function readPreload(asarPath) {
 }
 
 function stripBlock(text) {
-  const re = new RegExp(
-    MARK_START.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-    + '[\\s\\S]*?'
-    + MARK_END.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-  return text.replace(re, '').trimEnd();
+  return text.replace(ANY_BLOCK_RE, '').trimEnd();
+}
+
+/** 剥掉源文件自带的标记（源文件各自完整，只在外层留一对） */
+function stripMarkers(text) {
+  return text
+    .replace(/^\s*\/\* === \[START\] Antigravity 上下文用量悬浮面板[^=]*=== \*\/\s*$/m, '')
+    .replace(/^\s*\/\* === \[END\] Antigravity 上下文用量悬浮面板[^=]*=== \*\/\s*$/m, '')
+    .trim();
 }
 
 function status(customPath) {
@@ -105,9 +125,14 @@ function install(customPath) {
   } catch (e) { /* ignore */ }
 
   // 面板依赖 theme.js（设计 token 层），按顺序拼接后一起注入。
-  // 两个文件各自带 START/END 标记，stripBlock 会一起清掉，幂等不受影响。
-  const read = (f) => fs.readFileSync(path.join(__dirname, 'src', f), 'utf8');
-  const panelCode = read('theme.js').trimEnd() + '\n\n' + read('panel.js');
+  //
+  // ⚠ 两个源文件各自带一对 START/END 标记（单独看各自完整），但拼接后
+  //   负载里会出现**两对**标记 —— 再 install 时非贪婪匹配只剥掉前一半，
+  //   后半块残留叠加。所以这里把每个源文件的标记剥掉，只在外层包一对。
+  const read = (f) => stripMarkers(fs.readFileSync(path.join(__dirname, 'src', f), 'utf8'));
+  const panelCode = MARK_START + '\n'
+    + read('theme.js') + '\n\n' + read('panel.js') + '\n'
+    + MARK_END;
 
   // 关键：以「当前 asar」为基准（而非 .bak），才能在汉化补丁之上叠加。
   // 若当前 asar 已含本面板块则先剥离，保证幂等。

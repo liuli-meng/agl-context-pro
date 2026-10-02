@@ -1,4 +1,10 @@
-/* === [START] Antigravity 上下文用量悬浮面板 · 设计 token 层 === */
+/* === [START] Antigravity 上下文用量悬浮面板 === */
+/* ---------------------------------------------------------------------------
+ * 设计 token 层（theme.js）—— 与 panel.js 同属一个注入块，共用一个标记对。
+ *
+ * ⚠ 标记必须和 inject.js 的 MARK_START/MARK_END 逐字一致，否则 stripBlock
+ *   清不掉旧块，重复 install 会层层叠加。这两个文件靠拼接注入，标记只留一份。
+ * ------------------------------------------------------------------------- */
 /*
  * 视觉规范对齐 DeepSeek Harness / ZCode(opencode) 的桌面端设计体系。
  *
@@ -168,4 +174,4 @@
     PALETTE: PALETTE, LIGHT: LIGHT, DARK: DARK, METRIC: METRIC, css: css,
   };
 })(typeof window !== 'undefined' ? window : globalThis);
-/* === [END] Antigravity 上下文用量悬浮面板 · 设计 token 层 === */
+/* === [END] Antigravity 上下文用量悬浮面板 === */

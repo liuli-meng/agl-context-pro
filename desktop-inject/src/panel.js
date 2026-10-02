@@ -513,7 +513,8 @@
     '#agl-ctx button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer}',
 
     /* ---------------- 胶囊：只放三类信息，克制 ---------------- */
-    '.agl-pill{display:flex;align-items:center;gap:9px;height:34px;padding:0 12px 0 10px;',
+    // 高度 34→26，圆环 15→12，模型名默认隐藏（悬停才出）—— 常驻占屏幕的空间先砍一半
+    '.agl-pill{display:flex;align-items:center;gap:7px;height:26px;padding:0 10px 0 8px;',
     'border-radius:' + M_.rPill + ';cursor:pointer;',
     'background:var(--agl-bg-pill);',
     'backdrop-filter:blur(16px) saturate(1.6);-webkit-backdrop-filter:blur(16px) saturate(1.6);',
@@ -523,19 +524,22 @@
     '.agl-pill:active{transform:translateY(0) scale(.985)}',
 
     /* 圆环：细一点更像仪表，粗环显笨重 */
-    '.agl-ring{width:15px;height:15px;flex:0 0 auto;display:block}',
-    '.agl-pct{font-size:' + M_.fsBase + ';font-weight:' + M_.fwSemibold + ';',
+    '.agl-ring{width:12px;height:12px;flex:0 0 auto;display:block}',
+    '.agl-pct{font-size:12px;font-weight:' + M_.fwSemibold + ';',
     'font-variant-numeric:tabular-nums;letter-spacing:-.01em;line-height:1}',
-    '.agl-pct .u{font-size:10px;font-weight:' + M_.fwMedium + ';opacity:.55;margin-left:.5px}',
-    '.agl-cap{font-size:' + M_.fsSmall + ';color:var(--agl-text-tertiary);',
+    '.agl-pct .u{font-size:9px;font-weight:' + M_.fwMedium + ';opacity:.55;margin-left:.5px}',
+    '.agl-cap{font-size:11px;color:var(--agl-text-tertiary);',
     'font-variant-numeric:tabular-nums;line-height:1}',
-    '.agl-sep{width:1px;height:12px;background:var(--agl-border-line);flex:0 0 auto}',
-    '.agl-ml{font-size:' + M_.fsSmall + ';color:var(--agl-text-tertiary);',
-    'max-width:104px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:1}',
+    '.agl-sep{width:1px;height:11px;background:var(--agl-border-line);flex:0 0 auto}',
+    // 模型名：默认不占位，悬停整条胶囊时才展开（省掉常驻 104px）
+    '.agl-ml{font-size:11px;color:var(--agl-text-tertiary);',
+    'max-width:0;opacity:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:1;',
+    'transition:max-width ' + M_.durFast + ' ' + M_.ease + ',opacity ' + M_.durFast + ' ' + M_.ease + '}',
+    '.agl-pill:hover .agl-ml{max-width:104px;opacity:1}',
 
-    /* ---------------- 卡片 ---------------- */
-    '.agl-card{position:absolute;right:0;bottom:calc(100% + 10px);width:308px;',
-    'border-radius:' + M_.rCard + ';padding:14px 16px 13px;',
+    /* ---------------- 卡片：320→244 宽，16px 内边距 → 11px ---------------- */
+    '.agl-card{position:absolute;right:0;bottom:calc(100% + 8px);width:244px;',
+    'border-radius:' + M_.rCard + ';padding:11px 12px 10px;',
     'background:var(--agl-bg-card);',
     'backdrop-filter:blur(24px) saturate(1.5);-webkit-backdrop-filter:blur(24px) saturate(1.5);',
     'box-shadow:var(--agl-shadow-card);',
@@ -544,52 +548,53 @@
     'transition:opacity ' + M_.durFast + ' ' + M_.ease + ',transform ' + M_.durFast + ' ' + M_.ease + '}',
     '.agl-card.open{opacity:1;transform:none;pointer-events:auto}',
 
-    /* 标题行：左边小字标签，右边大数字。数字是主角，但只出现这一次 */
-    '.agl-hd{display:flex;align-items:center;justify-content:space-between;',
-    'gap:10px;margin-bottom:10px}',
-    '.agl-hd .lab{font-size:' + M_.fsSmall + ';color:var(--agl-text-secondary);',
+    /* 标题行：左「上下文占用」右大数字，一行搞定 */
+    '.agl-hdline{display:flex;align-items:baseline;justify-content:space-between;',
+    'gap:8px;margin-bottom:1px}',
+    '.agl-hdline .lab{font-size:11px;color:var(--agl-text-secondary);',
     'font-weight:' + M_.fwMedium + ';letter-spacing:.01em}',
-    '.agl-hd .val{display:flex;align-items:baseline;gap:2px;',
+    '.agl-hdline .val{display:flex;align-items:baseline;gap:1px;',
     'font-variant-numeric:tabular-nums}',
-    '.agl-hd .val b{font-size:' + M_.fsHero + ';font-weight:' + M_.fwSemibold + ';',
+    '.agl-hdline .val b{font-size:18px;font-weight:' + M_.fwSemibold + ';',
     'line-height:1;letter-spacing:-.02em}',
-    '.agl-hd .val i{font-size:' + M_.fsSmall + ';font-style:normal;opacity:.5;font-weight:' + M_.fwMedium + '}',
+    '.agl-hdline .val i{font-size:10px;font-style:normal;opacity:.45;font-weight:' + M_.fwMedium + '}',
 
-    /* 容量说明单独一行，小字弱化，避免和主数字抢注意力 */
-    '.agl-sub{font-size:' + M_.fsSmall + ';color:var(--agl-text-tertiary);',
-    'font-variant-numeric:tabular-nums;margin:-6px 0 11px;line-height:' + M_.lhTight + '}',
+    /* 容量说明：紧跟标题行，小字弱化 */
+    '.agl-sub{font-size:10px;color:var(--agl-text-tertiary);',
+    'font-variant-numeric:tabular-nums;font-family:' + M_.fontNum + ';',
+    'line-height:' + M_.lhTight + ';margin-bottom:7px}',
 
-    /* 进度条：8px 高、圆头、底槽是内嵌色而非边框 */
-    '.agl-bar{display:flex;height:8px;border-radius:' + M_.rTrack + ';overflow:hidden;',
-    'background:var(--agl-bg-track);margin-bottom:14px}',
+    /* 进度条：8→5px，块间距更紧 */
+    '.agl-bar{display:flex;height:5px;border-radius:' + M_.rTrack + ';overflow:hidden;',
+    'background:var(--agl-bg-track);margin-bottom:9px}',
     '.agl-bar i{display:block;height:100%;transition:width .35s ' + M_.ease + '}',
     // 段与段之间留 1.5px 缝隙（用背景色描边切开），避免同色段糊成一片
     '.agl-bar i:not(:last-child){box-shadow:1.5px 0 0 0 var(--agl-bg-card)}',
 
-    /* 明细行：dot 更小，标签中性色，数值同色但加粗 —— 不再每行一个饱和色 */
-    '.agl-row{display:flex;align-items:center;gap:8px;padding:3.5px 0;',
-    'font-size:' + M_.fsSmall + ';line-height:' + M_.lhTight + '}',
-    '.agl-dot{width:6px;height:6px;border-radius:' + M_.rDot + ';flex:0 0 auto}',
+    /* 明细行：行距 3.5→2px，dot 6→5px */
+    '.agl-row{display:flex;align-items:center;gap:6px;padding:2px 0;',
+    'font-size:11px;line-height:' + M_.lhTight + '}',
+    '.agl-dot{width:5px;height:5px;border-radius:2.5px;flex:0 0 auto}',
     '.agl-row .l{flex:1;color:var(--agl-text-secondary);',
     'overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
     '.agl-row .v{color:var(--agl-text-primary);font-weight:' + M_.fwMedium + ';',
-    'font-variant-numeric:tabular-nums;font-family:' + M_.fontNum + ';font-size:11.5px}',
+    'font-variant-numeric:tabular-nums;font-family:' + M_.fontNum + ';font-size:10.5px}',
 
     /* 底注：细分隔线 + 极小字，只承载元信息 */
-    '.agl-ft{margin-top:11px;padding-top:9px;border-top:1px solid var(--agl-border-hair);',
-    'font-size:11px;color:var(--agl-text-tertiary);line-height:1.55;',
-    'display:flex;flex-direction:column;gap:1px}',
-    '.agl-ft .r{display:flex;align-items:center;gap:8px}',
-    // key 定宽右对齐，value 左对齐 —— 三行标签垂直对齐，读起来是表格而不是流水句
-    '.agl-ft .k{color:var(--agl-text-faint);flex:0 0 auto;width:30px;text-align:right}',
+    '.agl-ft{margin-top:8px;padding-top:7px;border-top:1px solid var(--agl-border-hair);',
+    'font-size:10px;color:var(--agl-text-tertiary);line-height:1.5;',
+    'display:flex;flex-direction:column;gap:0}',
+    '.agl-ft .r{display:flex;align-items:center;gap:6px}',
+    // key 定宽右对齐，value 左对齐 —— 标签垂直对齐，读起来是表格而不是流水句
+    '.agl-ft .k{color:var(--agl-text-faint);flex:0 0 auto;width:24px;text-align:right}',
     '.agl-ft .t{color:var(--agl-text-secondary);overflow:hidden;',
     'text-overflow:ellipsis;white-space:nowrap;min-width:0}',
     '.agl-ft .t.num{font-variant-numeric:tabular-nums;font-family:' + M_.fontNum + '}',
 
     /* 状态徽标：极小的胶囊，比纯彩色文字更清晰 */
-    '.agl-tag{display:inline-flex;align-items:center;height:16px;padding:0 5px;',
-    'border-radius:4px;background:var(--agl-bg-inset);',
-    'font-size:10px;font-weight:' + M_.fwMedium + ';color:var(--agl-text-secondary);',
+    '.agl-tag{display:inline-flex;align-items:center;height:14px;padding:0 4px;',
+    'border-radius:3px;background:var(--agl-bg-inset);',
+    'font-size:9.5px;font-weight:' + M_.fwMedium + ';color:var(--agl-text-secondary);',
     'letter-spacing:.02em;line-height:1}',
     '.agl-tag.warn{color:var(--agl-state-warn)}',
 
@@ -734,18 +739,19 @@
     }
     if (BUDGET.total) rows += row('Rules / Skills', BUDGET.total, C.rule);
 
-    // 底注：来源标记 + 剩余 + 会话/模型
+    // 底注：来源标记 + 剩余 + 会话/模型 + 步数，全部压进两行
     var foot;
     if (CONV.ok && CONV.summary) {
       var freeTok = Math.max(0, m.limit - m.total);
       var srcTag = CONV.src === 'api' ? '精确' : (CONV.src === 'mixed' ? '精确+估算' : '估算');
-      foot = '<div class="r"><span class="k">来源</span>'
+      foot = '<div class="r">'
         + '<span class="tag">' + srcTag + '</span>'
-        + (CONV.compressed ? '<span class="tag warn">已压缩</span>' : '') + '</div>'
-        + '<div class="r"><span class="k">剩余</span><span class="t num">' + fmtTok(freeTok) + '</span></div>'
-        + '<div class="r"><span class="k">会话</span><span class="t">' + esc(String(CONV.summary)) + '</span></div>'
-        + '<div class="r"><span class="k">模型</span><span class="t">' + esc(nameOf(CONV.model))
-        + '</span><span class="k" style="width:auto">步数</span><span class="t num">' + CONV.steps + '</span></div>';
+        + (CONV.compressed ? '<span class="tag warn">已压缩</span>' : '')
+        + '<span class="t num" style="margin-left:auto">剩余 ' + fmtTok(freeTok) + '</span>'
+        + '</div>'
+        + '<div class="r"><span class="t">' + esc(String(CONV.summary)) + '</span></div>'
+        + '<div class="r"><span class="t">' + esc(nameOf(CONV.model))
+        + '</span><span class="t num" style="margin-left:auto">' + CONV.steps + ' 步</span></div>';
     } else {
       foot = '<div class="r"><span class="t">'
         + (CONV.err === 'no session' ? '开启对话后自动统计' : '等待 Antigravity 响应…')
@@ -753,7 +759,7 @@
     }
 
     card.innerHTML =
-      '<div class="agl-hd">'
+      '<div class="agl-hdline">'
       + '<span class="lab">上下文占用</span>'
       + '<span class="val"><b style="color:' + col + '">' + (m.known ? Math.round(m.pct) : '—') + '</b>'
       + '<i>' + (m.known ? '%' : '') + '</i></span>'

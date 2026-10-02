@@ -71,24 +71,24 @@ Antigravity IDE 的上下文用量三重监控扩展：状态栏同时显示 **�
 Antigravity **桌面版**是纯 Electron 壳（非 VS Code 内核，装不了 VSIX）。[desktop-inject/](desktop-inject/) 提供直接注入方案：把一段脚本追加进 `app.asar` 内的 `dist/preload.js`，在**主界面右下角**渲染一个 DeepSeek / ZCode 风格的浮动胶囊 —— 点击展开分段彩条 + 明细卡片。
 
 ```
-◔ 20% │ 200K / 1M  Gemini 3.8 Flash (High)     ← 胶囊
-┌─────────────────────────────────────┐
-│ 上下文占用                      20% │
-│ 200K / 1M tokens                    │
-│ ▓▓▓▓▓▓▓▓░░░░░░░░░░░░░░░░░░░░░░░░░░░ │
-│ ● 历史上下文（缓存命中）        196K │
-│ ● 本轮新增输入                  3.2K │
-│ ● 本轮输出                       588 │
-│ ● Rules / Skills                1.7K │
-│ ─────────────────────────────────── │
-│ 来源 [精确]                         │
-│ 剩余 800K                           │
-│ 会话 遗留问题与设计梳理              │
-│ 模型 Gemini 3.8 Flash (High) 步数 201│
-└─────────────────────────────────────┘
+◔ 20% │ 200K / 1M  Gemini 3.8 Flash (High)     ← 胶囊 26px 高，模型名悬停才展开
+┌───────────────────────────┐
+│ 上下文占用           20% │
+│ 200K / 1M tokens          │
+│ ▓▓▓▓▓▓░░░░░░░░░░░░░░░░░░░ │
+│ ● 历史上下文（缓存命中）196K│
+│ ● 本轮新增输入        3.2K│
+│ ● 本轮输出             588│
+│ ● Rules / Skills      1.7K│
+│ ───────────────────────── │
+│ 精确              剩余 800K│
+│ 遗留问题与设计梳理         │
+│ Gemini 3.8 Flash (High) 201 步│
+└───────────────────────────┘
+  卡片 244×211
 ```
 
-视觉层是一套独立的设计 token（`desktop-inject/src/theme.js`），三层结构 `原始色阶 → 语义别名 → 组件 CSS`，对齐 DeepSeek Harness 的 `--dsw-*` 与 ZCode/opencode 的 `--v2-*` 体系：中性色带蓝味、大面积中性 + 彩色只给进度条与状态点、边框 ≤7% 不透明度、字号阶梯 12/13/14/15/22、数字全部 `tabular-nums`。**自动跟随系统亮/暗主题**。详见 [desktop-inject/README.md](desktop-inject/README.md#视觉规范)。
+视觉层是一套独立的设计 token（`desktop-inject/src/theme.js`），三层结构 `原始色阶 → 语义别名 → 组件 CSS`，对齐 DeepSeek Harness 的 `--dsw-*` 与 ZCode/opencode 的 `--v2-*` 体系：中性色带蓝味、大面积中性 + 彩色只给进度条与状态点、边框 ≤7% 不透明度、数字全部 `tabular-nums`。**自动跟随系统亮/暗主题**。详见 [desktop-inject/README.md](desktop-inject/README.md#视觉规范)。
 
 **认证**：LS 的每个 RPC 都要 CSRF token（缺了返回 `401 missing CSRF token`）。页面把它挂在全局 `window.__APP_CONFIG__.csrfToken`，面板直接读，请求时带 `X-Codeium-Csrf-Token` + `Connect-Protocol-Version: 1`。
 
