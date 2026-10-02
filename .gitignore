@@ -14,3 +14,7 @@ Thumbs.db
 tray/__pycache__/
 tray/last_reading.json
 tray/tray_error.log
+
+# 桌面注入版运行时产物
+desktop-inject/*.log
+desktop-inject/__pycache__/

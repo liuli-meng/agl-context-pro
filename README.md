@@ -42,12 +42,14 @@ Antigravity IDE 的上下文用量三重监控扩展：状态栏同时显示 **�
 │ GetTokenBase → 预算总量/剩余/分组拆解/截断标志          │
 │ GetAllCascadeTrajectories（须带 metadata，否则返回空）   │
 │   → 取最近修改的会话 → GetCascadeTrajectorySteps         │
-│   → 末个 CHECKPOINT 的 modelUsage 即当前用量             │
-│   → 相邻 checkpoint input 骤降 >5000 判定发生过压缩     │
+│   → 末个 PLANNER_RESPONSE 的 modelUsage 即当前用量       │
+│     （⚠ 挂在该步，不在 CHECKPOINT 步）                   │
+│   → 真实上下文 = inputTokens + cacheReadTokens           │
+│   → 相邻用量骤降 >20000 判定发生过压缩                  │
 └──────────────────────────────────────────────────┘
 ```
 
-模型上下文上限按模型名映射（Claude 系 160k / Gemini Pro 128k / Gemini 3.5+ Flash 256k / GPT-OSS 80k），未知模型兜底 160k。上限映射是静态启发式，与平台真实 checkpointer 阈值可能相差一档，知悉即可。
+模型上下文上限按家族推断（Gemini 3.x = 1M / Claude 4.6 = 200K / GPT-OSS 120B = 128K）——LS 不返回窗口字段，只能本地估算，与平台真实阈值可能相差一档，知悉即可。模型**显示名**则从 `GetCascadeModelConfigData` 动态拉取官方 `label`，官方加模型自动跟上，无需改代码。
 
 **隐私**：所有请求只发往 `127.0.0.1`，不产生任何外部网络流量，不写任何文件。
 
@@ -63,6 +65,29 @@ Antigravity IDE 的上下文用量三重监控扩展：状态栏同时显示 **�
 ## Windows 托盘版
 
 不想装扩展？[tray/](tray/) 目录提供同一数据链路的**独立托盘程序**（Python + pystray）：托盘圆环图标显示预算占用、悬停看明细、可开机自启，IDE 之外全局可用。详见 [tray/README.md](tray/README.md)。
+
+## 桌面版主界面悬浮面板
+
+Antigravity **桌面版**是纯 Electron 壳（非 VS Code 内核，装不了 VSIX）。[desktop-inject/](desktop-inject/) 提供直接注入方案：把一段脚本追加进 `app.asar` 内的 `dist/preload.js`，在**主界面右下角**渲染一个 DeepSeek / ZCode 风格的浮动胶囊 —— 点击展开分段彩条 + 明细卡片。
+
+```
+27%  ~266K / ~1.0M  Gemini 3.8 Flash (High)     ← 胶囊
+┌─────────────────────────────────────┐
+│ 上下文已用 27%          ~266K / ~1.0M │
+│ ▓▓▓▓▓▓▓▓▓▓░░░░░░░░░░░░░░░░░░░░░░░░  │
+│ ■ 系统提示词                    ~1.5K │
+│ ■ 工具定义                      ~5.6K │
+│ ■ 对话消息                       ~259K │
+│ ■ Rules / Skills                ~1.7K │
+│ 剩余可用 ~734K · input ~2.7K / cache ~256K │
+└─────────────────────────────────────┘
+```
+
+**为什么能这么做**：主界面由 `language_server.exe` 提供的本地页 `https://127.0.0.1:<动态端口>/` 渲染，preload 与页面**同源**，可以直接 `fetch` LS 的 RPC —— 不需要 CIM 探测进程、不需要 netstat 找端口、不解析日志。
+
+与汉化补丁共存：两者都在 `dist/preload.js`，各有独立的 START/END 标记；`install` 以当前 asar 为基准，可反复执行不叠加。
+
+详见 [desktop-inject/README.md](desktop-inject/README.md)。
 
 ## 开发
 
