@@ -46,6 +46,8 @@ const checks = [
   ['旧取数残留（分批 50 注释）', count(/拉一个轨迹的全部步骤：分批 50/g), 0],
   ['旧常量残留（BATCH/CONCURRENCY）', count(/var BATCH = 50, CONCURRENCY = 5;/g), 0],
   ['规则行新文案', count(/Rules \/ Skills（已计入）/g), 1],
+  ['分母=平台阈值 256K', count(/FLASH: 256000/g), 1],
+  ['旧分母残留（1M）', count(/GEMINI: 1000000/g), 0],
 ];
 
 let bad = 0;

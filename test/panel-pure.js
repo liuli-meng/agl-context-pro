@@ -97,21 +97,34 @@ function test(name, fn) {
 console.log('panel.js 纯函数单测');
 
 // ---------- limitOf ----------
-console.log('\nlimitOf 模型分支');
-test('Claude 系 → 200K', () => {
-  assert.strictEqual(P.limitOf('MODEL_PLACEHOLDER_M26'), 200000);
-  assert.strictEqual(P.limitOf('claude-sonnet-4-6'), 200000);
+console.log('\nlimitOf 模型分支（平台截断阈值，不是原生窗口）');
+test('Gemini 3.5~3.8 Flash → 256K（平台默认）', () => {
+  assert.strictEqual(P.limitOf('MODEL_PLACEHOLDER_M318'), 256000);
+  assert.strictEqual(P.limitOf('MODEL_PLACEHOLDER_M298'), 256000);
+  assert.strictEqual(P.limitOf('MODEL_PLACEHOLDER_M71'), 256000);
+  assert.strictEqual(P.limitOf('gemini-3.8-flash-high'), 256000);
 });
-test('Gemini 系 → 1M', () => {
-  assert.strictEqual(P.limitOf('MODEL_PLACEHOLDER_M318'), 1000000);
-  assert.strictEqual(P.limitOf('gemini-3.8-flash-high'), 1000000);
+test('Gemini 3.5 以下的 Flash → 128K', () => {
+  assert.strictEqual(P.limitOf('gemini-3.1-flash'), 128000);
+  assert.strictEqual(P.limitOf('MODEL_PLACEHOLDER_M18'), 128000);
 });
-test('GPT-OSS → 128K', () => {
-  assert.strictEqual(P.limitOf('gpt-oss-120b'), 128000);
+test('Gemini Pro 系 → 128K', () => {
+  assert.strictEqual(P.limitOf('MODEL_PLACEHOLDER_M16'), 128000);
+  assert.strictEqual(P.limitOf('MODEL_PLACEHOLDER_M36'), 128000);
+  assert.strictEqual(P.limitOf('gemini-3.1-pro-high'), 128000);
 });
-test('空/未知 → 兜底 1M', () => {
-  assert.strictEqual(P.limitOf(''), 1000000);
-  assert.strictEqual(P.limitOf(undefined), 1000000);
+test('Claude 系 → 160K（原生 250K，平台只给 160K）', () => {
+  assert.strictEqual(P.limitOf('MODEL_PLACEHOLDER_M26'), 160000);
+  assert.strictEqual(P.limitOf('MODEL_PLACEHOLDER_M35'), 160000);
+  assert.strictEqual(P.limitOf('claude-sonnet-4-6'), 160000);
+});
+test('GPT-OSS → 80K', () => {
+  assert.strictEqual(P.limitOf('gpt-oss-120b'), 80000);
+});
+test('空 / 未知 → 兜底 256K（平台默认 Flash）', () => {
+  assert.strictEqual(P.limitOf(''), 256000);
+  assert.strictEqual(P.limitOf(undefined), 256000);
+  assert.strictEqual(P.limitOf('MODEL_PLACEHOLDER_M999'), 256000);
 });
 
 // ---------- 模型名解析（★ 核心回归） ----------
@@ -155,7 +168,7 @@ test('真切换模型：取最后一次 usage 的模型（分母随之变）', (
   ];
   const r = P.computeUsageFromSteps(steps, '');
   assert.strictEqual(r.model, 'MODEL_PLACEHOLDER_M26');
-  assert.strictEqual(P.limitOf(r.model), 200000);
+  assert.strictEqual(P.limitOf(r.model), 160000); // 分母随模型切换
 });
 
 test('完全没有 usage 时用 initialModel 兜底', () => {

@@ -37,11 +37,18 @@
   };
 
   // ---------------------------------------------------------------- 模型
-  // 窗口上限：按模型家族估算。真正的上限 LS 不返回，只能本地推断。
+  // ⚠ 这里是**平台截断阈值**，不是模型原生窗口！
+  //   Gemini 模型原生能吃到 1M，但 Antigravity 平台只给 Flash 系开 256K，
+  //   所以实测会在 ~27 万 token 处触发自动压缩（270124 / 278137 / 278569）。
+  //   来源：Antigravity-Context-Window-Monitor 的 live-verified 表；
+  //   与本机实测的压缩点吻合（略超 256K 是 IDE 启发式 tokenizer 的估算漂移）。
+  //   曾把这里写成 1M（模型原生窗口），导致百分比低估 3.9 倍 ——
+  //   面板显示 11% 时，实际已经用掉四成、并且被压缩过一次了。
   var M = {
-    GEMINI: 1000000,   // Gemini 3.x 系列（Flash / Pro）
-    CLAUDE: 200000,    // Claude 4.6
-    GPT_OSS: 128000,   // GPT-OSS 120B
+    FLASH: 256000,   // Gemini 3.5 ~ 3.8 Flash 全系（平台默认）
+    PRO: 128000,     // Gemini 3.1 Pro / Gemini 3 Flash
+    CLAUDE: 160000,  // Claude Sonnet / Opus 4.6（原生 250K，平台只给 160K）
+    GPT_OSS: 80000,  // GPT-OSS 120B
   };
 
   // 兜底映射（真实名称优先从 GetCascadeModelConfigData 动态拿）
@@ -62,17 +69,35 @@
     MODEL_OPENAI_GPT_OSS_120B_MEDIUM: 'GPT-OSS 120B',
   };
 
-  // 模型名 → 窗口上限（对齐开源实现的内置映射表）
+  /**
+   * 模型 ID → 平台截断阈值。
+   *
+   * 口径必须与 lsclient.js 的 guessContextLimit 保持一致，否则同一台机器上
+   * 状态栏和悬浮面板会显示两个不同的分母。
+   * placeholder 编号无语义（官方随时新增/重排），所以只对已知编号精确比对，
+   * 其余一律按 Gemini Flash 系（平台默认）算。
+   */
   function limitOf(model) {
-    var n = String(model || '').toLowerCase().replace(/[^a-z0-9]+/g, '-');
-    if (n.includes('m37') || n.includes('m36') || n.includes('m18') ||
-        n.includes('m318') || n.includes('m319') || n.includes('m320') ||
-        n.includes('m298') || n.includes('m299') || n.includes('m300') ||
-        n.includes('m71') || n.includes('m72') || n.includes('m73') ||
-        n.includes('m16') || n.includes('gemini')) return M.GEMINI;
-    if (n.includes('m35') || n.includes('m26') || n.includes('claude')) return M.CLAUDE;
-    if (n.includes('gpt-oss') || n.includes('gpt-oss-120')) return M.GPT_OSS;
-    return M.GEMINI;
+    var raw = String(model || '');
+    var id = raw.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+    var ph = id.match(/model-placeholder-(m\d+)/);
+    if (ph) {
+      var n = ph[1];
+      if (n === 'm35' || n === 'm26') return M.CLAUDE;       // Claude Sonnet / Opus 4.6
+      if (n === 'm18' || n === 'm16' || n === 'm36' || n === 'm37') return M.PRO; // Gemini Pro / 3 Flash
+      return M.FLASH;                                        // 其余已知编号都是 Flash 系
+    }
+    if (id.indexOf('claude') >= 0 || id.indexOf('opus') >= 0
+        || id.indexOf('sonnet') >= 0) return M.CLAUDE;
+    if (id.indexOf('gpt') >= 0 || id.indexOf('oss') >= 0) return M.GPT_OSS;
+    if (id.indexOf('pro') >= 0) return M.PRO;
+    if (id.indexOf('flash') >= 0 || id.indexOf('lite') >= 0) {
+      // 归一化后版本号是 "gemini-3-8-..." 这种形状
+      var vm = id.match(/(\d+)-(\d+)/);
+      var ver = vm ? parseFloat(vm[1] + '.' + vm[2]) : NaN;
+      return (!isNaN(ver) && ver < 3.5) ? M.PRO : M.FLASH;
+    }
+    return M.FLASH; // 平台默认模型就是 3.8 Flash
   }
 
   function nameOf(model) {
@@ -580,7 +605,7 @@
   // ---------------------------------------------------------------- 计算
   function metrics() {
     var used = CONV.ok ? CONV.used : 0;
-    var limit = (CONV.ok && CONV.limit) ? CONV.limit : M.GEMINI;
+    var limit = (CONV.ok && CONV.limit) ? CONV.limit : M.FLASH;
     var pct = limit ? (100 * used / limit) : 0;
     return {
       used: used, limit: limit, total: used,

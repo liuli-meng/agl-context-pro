@@ -2,7 +2,7 @@
   "name": "agl-context-pro",
   "displayName": "AGL 上下文监控",
   "description": "Antigravity IDE 上下文用量三重监控：① 预算占用（Rules/Skills 逐项拆解）② 当前对话 token 用量（真实上下文 = 新增输入 + 缓存命中 + 输出，含压缩检测）③ 官方额度（服务端视角的模型剩余比例与重置时间）",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "publisher": "xiaozuliang",
   "license": "MIT",
   "engines": {

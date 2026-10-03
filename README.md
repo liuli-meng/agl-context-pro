@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/liuli-meng/agl-context-pro/actions/workflows/ci.yml/badge.svg)](https://github.com/liuli-meng/agl-context-pro/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.3.1-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.3.2-blue.svg)](CHANGELOG.md)
 
 Antigravity IDE 的上下文用量三重监控扩展：状态栏同时显示 **① 预算占用**、**② 当前对话用量** 和 **③ 官方额度**，纯 Node 实现、零 npm 依赖、无编译步骤。
 
@@ -51,7 +51,7 @@ Antigravity IDE 的上下文用量三重监控扩展：状态栏同时显示 **�
 └──────────────────────────────────────────────────┘
 ```
 
-模型上下文上限按家族推断（Gemini 3.x = 1M / Claude 4.6 = 200K / GPT-OSS 120B = 128K）——LS 不返回窗口字段，只能本地估算，与平台真实阈值可能相差一档，知悉即可。模型**显示名**则从 `GetCascadeModelConfigData` 动态拉取官方 `label`，官方加模型自动跟上，无需改代码。
+模型上限用的是**平台截断阈值**，不是模型原生窗口 —— Gemini 3.5~3.8 Flash = **256K** / Gemini 3.1 Pro = 128K / Claude 4.6 = 160K / GPT-OSS 120B = 80K。这一点很关键：Gemini 模型原生能吃到 1M，但 Antigravity 平台只给 Flash 系开 256K，所以实测会在 **27 万 token 左右触发自动压缩**（实测压缩点 270124 / 278137 / 278569 —— 略超 256K 是 IDE 启发式 tokenizer 的估算漂移）。按原生 1M 当分母会把压力低估近 4 倍。模型**显示名**则从 `GetCascadeModelConfigData` 动态拉取官方 `label`，官方加模型自动跟上，无需改代码。
 
 **隐私**：所有请求只发往 `127.0.0.1`，不产生任何外部网络流量，不写任何文件。
 
@@ -73,19 +73,19 @@ Antigravity IDE 的上下文用量三重监控扩展：状态栏同时显示 **�
 Antigravity **桌面版**是纯 Electron 壳（非 VS Code 内核，装不了 VSIX）。[desktop-inject/](desktop-inject/) 提供直接注入方案：把一段脚本追加进 `app.asar` 内的 `dist/preload.js`，在**主界面右下角**渲染一个 DeepSeek / ZCode 风格的浮动胶囊 —— 点击展开分段彩条 + 明细卡片。
 
 ```
-◔ 20% │ 200K / 1M  Gemini 3.8 Flash (High)     ← 胶囊 26px 高，模型名悬停才展开
+◔ 41% │ 105K / 256K  Gemini 3.8 Flash (High)     ← 胶囊 26px 高，模型名悬停才展开
 ┌───────────────────────────┐
-│ 上下文占用           20% │
-│ 200K / 1M tokens          │
-│ ▓▓▓▓▓▓░░░░░░░░░░░░░░░░░░░ │
-│ ● 历史上下文（缓存命中）196K│
-│ ● 本轮新增输入        3.2K│
-│ ● 本轮输出             588│
-│ ● Rules / Skills      1.7K│
+│ 上下文占用           41% │
+│ 105K / 256K tokens        │
+│ ▓▓▓▓▓▓▓▓▓▓░░░░░░░░░░░░░░ │
+│ ● 历史上下文（缓存命中）97.7K│
+│ ● 本轮新增输入        7.3K│
+│ ● 本轮输出             130│
+│ ● Rules / Skills（已计入）1.7K│
 │ ───────────────────────── │
-│ 精确              剩余 800K│
-│ 遗留问题与设计梳理         │
-│ Gemini 3.8 Flash (High) 201 步│
+│ 精确              剩余 151K│
+│ Remaining Work Audit Results│
+│ Gemini 3.8 Flash (High) 520 步│
 └───────────────────────────┘
   卡片 244×211
 ```

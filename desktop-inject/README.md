@@ -2,7 +2,7 @@
 
 给 **Antigravity 桌面版**主界面右下角加一个 DeepSeek / ZCode 风格的上下文用量胶囊。
 
-- 右下角浮动胶囊（**26px 高**）：`◔ 20% │ 200K / 1M` —— 模型名平时不占位，**悬停整条胶囊才展开**
+- 右下角浮动胶囊（**26px 高**）：`◔ 41% │ 105K / 256K` —— 模型名平时不占位，**悬停整条胶囊才展开**
 - 点击展开卡片（**244×211**）：分段彩条 + 明细（历史上下文 / 本轮新增 / 输出 / Rules·Skills）+ 来源与剩余
 - **自动跟随系统亮/暗主题**（token 层驱动，不需要两套 CSS）
 - 5 秒轮询自动刷新，只在页面可见时拉取
@@ -145,7 +145,7 @@ CDP 实测（Antigravity 2.19.1，同一时刻对照）：
 | Rules / Skills | `GetTokenBase` → `customizationTokenBase.totalTokens`（实测 1673） |
 | 对话上下文 | `GetAllCascadeTrajectories` + `GetCascadeTrajectorySteps`（见下方算法） |
 | 模型名 | `GetUserStatus` → `cascadeModelConfigData.clientModelConfigs[].label`，动态拿，不硬编码 |
-| 窗口上限 | 本地推断：Gemini 3.x = 1M / Claude 4.6 = 200K / GPT-OSS 120B = 128K |
+| 平台截断阈值 | **不是原生窗口**：Gemini 3.5~3.8 Flash **256K** / Gemini 3.1 Pro 128K / Claude 4.6 160K / GPT-OSS 120B 80K。Gemini 原生能吃到 1M，但平台只给 Flash 系开 256K —— 实测压缩点落在 27 万即由此而来 |
 
 ### 上下文用量算法（实测口径）
 
@@ -211,9 +211,11 @@ tokens = ceil(asciiChars / 4 + nonAsciiChars / 1.5)
 
 **真实页面验证**（通过 CDP 连运行中的 Antigravity，把 panel.js 注入进去看渲染）：
 
-- 真实会话「遗留问题与设计梳理」（241 步）：面板 **`20% ~200K / ~1.0M`**
-  - 对应原始数据 `input=3xxx + cacheRead=196xxx + output=588 = 200xxx` ✅ **完全吻合**
-  - 明细行：`历史上下文（缓存命中）196K / 本轮新增输入 3.2K / 本轮输出 588`
+- 真实会话（用 CDP 实读面板 DOM）：`41% | 105K / 256K`
+  - 对应原始数据 `input=7300 + cacheRead=97700 + output=130 ≈ 105K` ✅ **完全吻合**
+  - 明细行：`历史上下文（缓存命中）97.7K / 本轮新增输入 7.3K / 本轮输出 130`
+  - 同一会话的压缩点：`CHECKPOINT` 步携带 `checkpoint.sessionSummary`（压缩后的摘要），
+    其 `retryInfos[0].usage` = `input 5849 + cacheRead 265417 = 271266` —— 这才是触发压缩的真实用量
 - 四个 RPC 全部 HTTP 200：`GetTokenBase` / `GetAllCascadeTrajectories` /
   `GetCascadeModelConfigData` / `GetUserStatus`
 
@@ -237,4 +239,4 @@ tokens = ceil(asciiChars / 4 + nonAsciiChars / 1.5)
 - [AGI-is-going-to-arrive/Antigravity-Context-Window-Monitor](https://github.com/AGI-is-going-to-arrive/Antigravity-Context-Window-Monitor)
   —— 字符估算公式、压缩检测阈值、单次拉取 + 尾部截断思路
 - [daluoxiaojun/antigravity-context-window-monitor-win](https://github.com/daluoxiaojun/antigravity-context-window-monitor-win)
-  —— 窗口上限映射表（Gemini 1M / Claude 200K / GPT-OSS 128K）、会话选择优先级
+  —— 平台截断阈值映射表（Flash 256K / Pro 128K / Claude 160K / GPT-OSS 80K）、会话选择优先级
