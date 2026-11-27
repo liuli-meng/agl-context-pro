@@ -390,9 +390,21 @@ def fetch_user_status(ls_path=None, timeout=60, reuse=True):
 
 # ---------------------------------------------------------------- 对话用量
 
-# 模型 → 上下文窗口上限（2026-10-02 按本机 LS 实际返回的模型表整理）
-# 取自 GetCascadeModelConfigData 的 modelOrAlias.model
+# 模型 → 上下文窗口上限（2026-11-27 按本机 LS 实际返回的模型表重校）
+# 取自 GetUserStatus 的 clientModelConfigs（modelOrAlias.model → modelId）
+# ⚠ 口径分两代：Gemini 4 全系原生 1M 全开（实测 Hydrogen XHigh 跑到 386K 未压缩）；
+#   Gemini 3.x 及更早是平台截断（Flash 256K / Pro 128K，实测压缩点 27 万上下）。
+_GEMINI4 = 1048576
+
 _MODEL_LIMITS = {
+    # Gemini 4 全系（Carbon / Neon / Hydrogen / Argon）
+    'M670': _GEMINI4,   # Gemini 4 Carbon
+    'M536': _GEMINI4,   # Gemini 4 Neon
+    'M421': _GEMINI4,   # Gemini 4 Argon
+    'M525': _GEMINI4,   # Gemini 4 Hydrogen (High)
+    'M528': _GEMINI4,   # Gemini 4 Hydrogen (XHigh)
+    'M526': _GEMINI4,   # Gemini 4 Hydrogen (Medium)
+    'M527': _GEMINI4,   # Gemini 4 Hydrogen (Low)
     # Claude 系（Anthropic 200k 窗口，Antigravity 侧按 160k 计）
     'M35': 160000,   # Claude Sonnet 4.6 (Thinking)
     'M26': 160000,   # Claude Opus 4.6 (Thinking)
@@ -402,7 +414,7 @@ _MODEL_LIMITS = {
     'M18': 128000,
     'M37': 128000,
     # Gemini Flash 系（3.5+ 为 256k）
-    'M318': 256000,  # Gemini 3.8 Flash (High)
+    'M318': 256000,  # Gemini 3.8 Flash (High) —— 11/30 下架
     'M319': 256000,  # Gemini 3.8 Flash (Medium)
     'M320': 256000,  # Gemini 3.8 Flash (Low)
     'M298': 256000,  # Gemini 3.7 Flash (High)
@@ -415,24 +427,27 @@ _MODEL_LIMITS = {
 
 
 def guess_context_limit(model_id):
-    """按模型 id 猜上下文窗口上限。"""
+    """按模型 id 猜上下文窗口上限（与 lsclient.js 的 guessContextLimit 同口径）。"""
     import re as _re
+    low = str(model_id or '').lower()
+    # 官方 modelId（如 gemini-4-hydrogen-xhigh）优先
+    if 'gemini-4' in low or 'gemini4' in low:
+        return _GEMINI4
+    if 'claude' in low or 'opus' in low or 'sonnet' in low or 'haiku' in low:
+        return 160000
+    if 'gpt' in low or 'oss' in low:
+        return 80000
+    if 'gemini' in low:
+        if 'pro' in low:
+            return 128000
+        vm = _re.search(r'gemini-3[.\-](\d+)', low)
+        minor = int(vm.group(1)) if vm else 0
+        return 256000 if minor >= 5 else 128000
     mid = str(model_id or '').upper()
     m = _re.search(r'MODEL_PLACEHOLDER_([A-Z]\d+)', mid)
     if m and m.group(1) in _MODEL_LIMITS:
         return _MODEL_LIMITS[m.group(1)]
-    low = str(model_id or '').lower()
-    if 'claude' in low or 'opus' in low or 'sonnet' in low:
-        return 160000
-    if 'flash' in low or 'lite' in low or 'unspecified' in low:
-        vm = _re.search(r'(\d+\.\d+)', low)
-        ver = float(vm.group(1)) if vm else 0
-        return 128000 if (ver and ver < 3.5) else 256000
-    if 'gpt' in low or 'oss' in low:
-        return 80000
-    if 'pro' in low:
-        return 128000
-    # 兜底：M 编号按 Flash 系算
+    # 兜底：未知 M 编号按 Flash 系算
     return 256000
 
 

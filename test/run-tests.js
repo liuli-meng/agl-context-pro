@@ -36,10 +36,22 @@ function test(name, fn) {
     assert.strictEqual(lsclient.guessContextLimit('gemini-3.8-flash-high'), 256000);
     assert.strictEqual(lsclient.guessContextLimit('gemini-2.5-flash-lite'), 128000); // <3.5 走旧档
     assert.strictEqual(lsclient.guessContextLimit('gpt-oss-120b-medium'), 80000);
+    // Gemini 4 全系：原生 1M（2026-11-27 实测 Hydrogen XHigh 跑到 386K 未压缩）
+    assert.strictEqual(lsclient.guessContextLimit('gemini-4-hydrogen-xhigh'), 1048576);
+    assert.strictEqual(lsclient.guessContextLimit('gemini-4-carbon-disabled'), 1048576);
+    assert.strictEqual(lsclient.guessContextLimit('gemini-4-neon'), 1048576);
     // placeholder 按编号精确比对：m26 是 Claude，但 m264 绝不能被子串误命中
     assert.strictEqual(lsclient.guessContextLimit('MODEL_PLACEHOLDER_M26'), 160000);
     assert.strictEqual(lsclient.guessContextLimit('MODEL_PLACEHOLDER_M264'), 256000);
-    assert.strictEqual(lsclient.guessContextLimit('unknown-model'), 160000);
+    // Gemini 4 的 placeholder 编号（2026-11 官方整批重排后的实测表）
+    assert.strictEqual(lsclient.guessContextLimit('MODEL_PLACEHOLDER_M528'), 1048576);
+    assert.strictEqual(lsclient.guessContextLimit('MODEL_PLACEHOLDER_M525'), 1048576);
+    assert.strictEqual(lsclient.guessContextLimit('MODEL_PLACEHOLDER_M670'), 1048576);
+    assert.strictEqual(lsclient.guessContextLimit('MODEL_PLACEHOLDER_M536'), 1048576);
+    assert.strictEqual(lsclient.guessContextLimit('MODEL_PLACEHOLDER_M421'), 1048576);
+    assert.strictEqual(lsclient.guessContextLimit('MODEL_PLACEHOLDER_M318'), 256000);
+    // 未知兜底与 panel.js 的 limitOf 对齐（平台默认模型是 Flash 系）
+    assert.strictEqual(lsclient.guessContextLimit('unknown-model'), 256000);
   });
 
   await test('parseTrajectories 按 lastModifiedTime 降序 + requestedModel 优先', () => {

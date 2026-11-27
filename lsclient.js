@@ -96,8 +96,13 @@ async function listLsProcesses() {
     '[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;' +
     "Get-CimInstance Win32_Process -Filter \"Name='language_server.exe'\" " +
     '| Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress';
-  const out = await run('powershell.exe',
-    ['-NoProfile', '-NonInteractive', '-Command', script], 10000);
+  const args = ['-NoProfile', '-NonInteractive', '-Command', script];
+  let out = await run('powershell.exe', args, 10000);
+  // PowerShell 冷启动偶尔超过 10s（首次加载 CIM/WMI 模块），此时 run() 超时返回空串，
+  // 会让整条发现链误判成「没装 Antigravity」。空结果再给一次更宽的机会。
+  // ⚠ 2026-11-27 实机复现：同一个进程下第一次 getUserStatus 报「未发现 language_server」，
+  //   紧接着第二次就正常 —— 就是这里被超时坑掉的。
+  if (!out.trim()) out = await run('powershell.exe', args, 20000);
   if (!out.trim()) return [];
 
   let parsed;
@@ -218,28 +223,77 @@ async function getContext() {
 // ---------------------------------------------------------------- 对话级用量
 
 /**
- * 按模型名猜测上下文上限（简化自社区实测表）：
- * Claude 系 160k / Gemini Pro 128k / Gemini 3.5+ Flash 256k / GPT-OSS 80k，未知兜底 160k。
- * placeholder ID（MODEL_PLACEHOLDER_Mxx）无语义，提取编号精确比对。
+ * placeholder → 官方 modelId 的映射缓存（由 getUserStatus 填充）。
+ *
+ * 为什么需要它：官方 `MODEL_PLACEHOLDER_Mxx` 编号无语义，且每次上新模型都会整批重排
+ * （2026-10-02 时是 M16/M35/M318，2026-11 起 Gemini 4 全系换成 M421/M525~M528/M536/M670）。
+ * 硬编码编号永远追不上，而 `GetUserStatus` 的每条 config 都带可读的 `modelId`
+ * （`gemini-4-hydrogen-xhigh` / `claude-sonnet-4-6`）—— 用真名判系列才能自动跟上。
+ * placeholder 表只作「拿不到 modelId 时的离线兜底」。
+ */
+const aliasModelIds = new Map();
+let modelsIndexed = false; // 是否已从 GetUserStatus 建过一次 placeholder → modelId 缓存
+
+const GEMINI4_WINDOW = 1048576; // Gemini 4 全系原生 1M（1,048,576）
+
+/** placeholder 离线兜底表（2026-11-27 实测 GetUserStatus 的完整模型表） */
+const PLACEHOLDER_LIMITS = {
+  // Gemini 4：Carbon / Neon / Hydrogen(Low~XHigh) / Argon —— 原生 1M
+  M670: GEMINI4_WINDOW,                                        // Carbon
+  M536: GEMINI4_WINDOW,                                        // Neon
+  M421: GEMINI4_WINDOW,                                        // Argon
+  M527: GEMINI4_WINDOW, M526: GEMINI4_WINDOW,                  // Hydrogen Low / Medium
+  M525: GEMINI4_WINDOW, M528: GEMINI4_WINDOW,                  // Hydrogen High / XHigh
+  // Gemini 3.x Flash（平台 256K）
+  M318: 256000, M319: 256000, M320: 256000,                    // 3.8 Flash
+  M298: 256000, M299: 256000, M300: 256000,                    // 3.7 Flash
+  M71: 256000, M72: 256000, M73: 256000,                       // 3.6 Flash
+  // Gemini Pro（平台 128K）
+  M16: 128000, M36: 128000, M18: 128000, M37: 128000,
+  // Claude（平台 160K）
+  M35: 160000, M26: 160000,
+};
+
+/**
+ * 按模型名猜测上下文上限。
+ *
+ * ⚠ 口径分两代，别混：
+ *   · Gemini 3.x 及更早：Antigravity 平台会提前截断（Flash 256K / Pro 128K），
+ *     实测压缩点 270124 / 278137 / 278569。
+ *   · Gemini 4 全系：**1M 原生窗口全开**。2026-11-27 本机实测 `Gemini 4 Hydrogen (XHigh)`
+ *     单会话跑到 386,425 tokens 仍未触发压缩，旧的 256K 结论对新模型已不成立；
+ *     若还按 256K 当分母，百分比会算出 148%（溢出），进度条和告警全部失真。
  */
 function guessContextLimit(modelId) {
-  const id = String(modelId || '').toLowerCase();
-  const ph = id.match(/model_placeholder_(m\d+)/);
-  if (ph) {
-    const n = ph[1];
-    if (n === 'm35' || n === 'm26') return 160000;               // Claude Sonnet/Opus
-    if (n === 'm18' || n === 'm16' || n === 'm37' || n === 'm36') return 128000; // Gemini Pro
-    return 256000; // 其余已知 placeholder 均为 Gemini Flash 系（3.5+）
-  }
-  if (id.includes('claude') || id.includes('opus') || id.includes('sonnet')) return 160000;
-  if (id.includes('pro')) return 128000;
-  if (id.includes('flash') || id.includes('lite') || id.includes('unspecified')) {
-    const m = id.match(/(\d+\.\d+)/);
-    const ver = m ? parseFloat(m[1]) : NaN;
-    return (!Number.isNaN(ver) && ver < 3.5) ? 128000 : 256000;
-  }
+  const raw = String(modelId || '');
+  const id = (aliasModelIds.get(raw.toUpperCase()) || raw)
+    .toLowerCase().replace(/[^a-z0-9.]+/g, '-');
+
+  // 1) Gemini 4 全系（Carbon / Neon / Hydrogen / Argon）
+  if (id.includes('gemini-4') || id.includes('gemini4')) return GEMINI4_WINDOW;
+
+  // 2) Claude 系（平台按 160K 计）
+  if (id.includes('claude') || id.includes('opus')
+      || id.includes('sonnet') || id.includes('haiku')) return 160000;
+
+  // 3) GPT-OSS
   if (id.includes('gpt') || id.includes('oss')) return 80000;
-  return 160000;
+
+  // 4) Gemini 3.x：Pro 128K，3.5+ Flash 256K
+  if (id.includes('gemini')) {
+    if (id.includes('pro')) return 128000;
+    const v = id.match(/gemini-3[-.](\d+)/);
+    const minor = v ? parseInt(v[1], 10) : NaN;
+    return (!Number.isNaN(minor) && minor >= 5) ? 256000 : 128000;
+  }
+
+  // 5) placeholder 离线兜底
+  const ph = id.match(/model-placeholder-(m\d+)/);
+  if (ph) {
+    const hit = PLACEHOLDER_LIMITS[ph[1].toUpperCase()];
+    if (hit) return hit;
+  }
+  return 256000; // 平台默认模型（Flash 系）
 }
 
 /** 解析 GetAllCascadeTrajectories 响应 → 按最近修改降序的会话数组（纯函数，可测） */
@@ -328,6 +382,11 @@ function parseConversationSteps(steps) {
 async function getConversation() {
   let s = await getSession();
   if (!s) return { ok: false, error: '未发现运行中的 language_server' };
+
+  // 分母判定依赖官方模型表（placeholder → modelId）。状态栏/面板可能先于额度查询跑起来，
+  // 缓存空着就只能落到 placeholder 兜底表 —— 这里补一次，保证第一帧就按真名算。
+  // 只在没建过缓存时触发一次，之后零额外开销。
+  if (!modelsIndexed) await getUserStatus();
 
   let list;
   try {
@@ -431,6 +490,14 @@ async function getUserStatus() {
   const us = (raw && raw.userStatus) || {};
   const configs = (us.cascadeModelConfigData && us.cascadeModelConfigData.clientModelConfigs) || [];
 
+  // 顺手记下 placeholder → 官方 modelId，供 guessContextLimit 判窗口（见 aliasModelIds）。
+  // 只要面板/状态栏跑过一次额度查询，后面的对话用量就能按真名算分母，官方换编号自动跟上。
+  for (const c of configs) {
+    const alias = String((c.modelOrAlias && c.modelOrAlias.model) || '');
+    const real = String(c.modelId || '');
+    if (alias && real) aliasModelIds.set(alias.toUpperCase(), real);
+  }
+
   // proto3 float 0.0 不序列化的坑：remainingFraction 缺失时，
   // resetTime 是 epoch → 额度未动（满），是真实未来时间 → 已用尽（0）
   const resolveFraction = (q) => {
@@ -452,6 +519,8 @@ async function getUserStatus() {
 
   const planInfo = us.planStatus && us.planStatus.planInfo;
   const credits = (us.userTier && us.userTier.availableCredits) || [];
+
+  modelsIndexed = true; // 模型表已建，getConversation 不必再补拉
 
   return {
     ok: true,

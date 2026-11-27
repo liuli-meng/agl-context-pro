@@ -145,7 +145,7 @@ CDP 实测（Antigravity 2.19.1，同一时刻对照）：
 | Rules / Skills | `GetTokenBase` → `customizationTokenBase.totalTokens`（实测 1673） |
 | 对话上下文 | `GetAllCascadeTrajectories` + `GetCascadeTrajectorySteps`（见下方算法） |
 | 模型名 | `GetUserStatus` → `cascadeModelConfigData.clientModelConfigs[].label`，动态拿，不硬编码 |
-| 平台截断阈值 | **不是原生窗口**：Gemini 3.5~3.8 Flash **256K** / Gemini 3.1 Pro 128K / Claude 4.6 160K / GPT-OSS 120B 80K。Gemini 原生能吃到 1M，但平台只给 Flash 系开 256K —— 实测压缩点落在 27 万即由此而来 |
+| 分母（窗口上限） | **逐代口径**：Gemini 4 全系 **1M**（原生全开，实测 Hydrogen XHigh 跑到 386K 未压缩）/ Gemini 3.5~3.8 Flash **256K** / Gemini 3.x Pro 128K / Claude 4.6 160K / GPT-OSS 120B 80K。判系列优先用官方 `modelId`（`gemini-4-hydrogen-xhigh`），placeholder 编号表只兜底 |
 
 ### 上下文用量算法（实测口径）
 
@@ -239,4 +239,5 @@ tokens = ceil(asciiChars / 4 + nonAsciiChars / 1.5)
 - [AGI-is-going-to-arrive/Antigravity-Context-Window-Monitor](https://github.com/AGI-is-going-to-arrive/Antigravity-Context-Window-Monitor)
   —— 字符估算公式、压缩检测阈值、单次拉取 + 尾部截断思路
 - [daluoxiaojun/antigravity-context-window-monitor-win](https://github.com/daluoxiaojun/antigravity-context-window-monitor-win)
-  —— 平台截断阈值映射表（Flash 256K / Pro 128K / Claude 160K / GPT-OSS 80K）、会话选择优先级
+  —— 早期平台截断阈值映射表（Flash 256K / Pro 128K / Claude 160K / GPT-OSS 80K）、会话选择优先级
+  （Gemini 3.x 部分仍适用；Gemini 4 已在 2026-11 放开到原生 1M，本项目按实测另立口径）

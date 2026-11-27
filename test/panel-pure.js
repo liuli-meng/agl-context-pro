@@ -79,6 +79,7 @@ const src = `
   __EXPORT__.usageOf = usageOf;
   __EXPORT__.computeUsageFromSteps = computeUsageFromSteps;
   __EXPORT__.M = M;
+  __EXPORT__.MODEL_IDS = MODEL_IDS;
 `;
 
 const P = {};
@@ -97,7 +98,27 @@ function test(name, fn) {
 console.log('panel.js 纯函数单测');
 
 // ---------- limitOf ----------
-console.log('\nlimitOf 模型分支（平台截断阈值，不是原生窗口）');
+console.log('\nlimitOf 模型分支（Gemini 4 原生 1M；3.x 及更早是平台截断）');
+test('Gemini 4 全系 → 1M（Carbon/Neon/Hydrogen/Argon）', () => {
+  assert.strictEqual(P.limitOf('MODEL_PLACEHOLDER_M528'), 1048576); // Hydrogen XHigh
+  assert.strictEqual(P.limitOf('MODEL_PLACEHOLDER_M525'), 1048576); // Hydrogen High
+  assert.strictEqual(P.limitOf('MODEL_PLACEHOLDER_M526'), 1048576);
+  assert.strictEqual(P.limitOf('MODEL_PLACEHOLDER_M527'), 1048576);
+  assert.strictEqual(P.limitOf('MODEL_PLACEHOLDER_M670'), 1048576); // Carbon
+  assert.strictEqual(P.limitOf('MODEL_PLACEHOLDER_M536'), 1048576); // Neon
+  assert.strictEqual(P.limitOf('MODEL_PLACEHOLDER_M421'), 1048576); // Argon
+  assert.strictEqual(P.limitOf('gemini-4-hydrogen-xhigh'), 1048576);
+  assert.strictEqual(P.limitOf('gemini-4-carbon-disabled'), 1048576);
+});
+test('placeholder 靠 modelId 翻译成真名后判窗口（官方换编号自动跟上）', () => {
+  // 模拟 GetUserStatus 的 indexModels 把 M999 关联到 gemini-4-neon
+  P.MODEL_IDS.MODEL_PLACEHOLDER_M999 = 'gemini-4-neon';
+  assert.strictEqual(P.limitOf('MODEL_PLACEHOLDER_M999'), 1048576);
+  P.MODEL_IDS.MODEL_PLACEHOLDER_M998 = 'claude-sonnet-4-6';
+  assert.strictEqual(P.limitOf('MODEL_PLACEHOLDER_M998'), 160000);
+  // 没翻译的未知编号仍按 Flash 系兜底
+  assert.strictEqual(P.limitOf('MODEL_PLACEHOLDER_M997'), 256000);
+});
 test('Gemini 3.5~3.8 Flash → 256K（平台默认）', () => {
   assert.strictEqual(P.limitOf('MODEL_PLACEHOLDER_M318'), 256000);
   assert.strictEqual(P.limitOf('MODEL_PLACEHOLDER_M298'), 256000);
@@ -124,7 +145,7 @@ test('GPT-OSS → 80K', () => {
 test('空 / 未知 → 兜底 256K（平台默认 Flash）', () => {
   assert.strictEqual(P.limitOf(''), 256000);
   assert.strictEqual(P.limitOf(undefined), 256000);
-  assert.strictEqual(P.limitOf('MODEL_PLACEHOLDER_M999'), 256000);
+  assert.strictEqual(P.limitOf('MODEL_PLACEHOLDER_M991'), 256000);
 });
 
 // ---------- 模型名解析（★ 核心回归） ----------

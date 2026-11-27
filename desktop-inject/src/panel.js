@@ -37,22 +37,35 @@
   };
 
   // ---------------------------------------------------------------- 模型
-  // ⚠ 这里是**平台截断阈值**，不是模型原生窗口！
-  //   Gemini 模型原生能吃到 1M，但 Antigravity 平台只给 Flash 系开 256K，
-  //   所以实测会在 ~27 万 token 处触发自动压缩（270124 / 278137 / 278569）。
-  //   来源：Antigravity-Context-Window-Monitor 的 live-verified 表；
-  //   与本机实测的压缩点吻合（略超 256K 是 IDE 启发式 tokenizer 的估算漂移）。
-  //   曾把这里写成 1M（模型原生窗口），导致百分比低估 3.9 倍 ——
-  //   面板显示 11% 时，实际已经用掉四成、并且被压缩过一次了。
+  // ⚠ 分母口径分两代，别混（2026-11-27 按本机 LS 实测重校）：
+  //   · Gemini 4 全系（Carbon / Neon / Hydrogen / Argon）：**原生 1M 全开**。
+  //     实测 `Gemini 4 Hydrogen (XHigh)` 单会话跑到 386,425 tokens 未触发压缩，
+  //     旧的 256K 结论对新模型已不成立；沿用 256K 会算出 148%（溢出）。
+  //   · Gemini 3.x 及更早：平台提前截断 —— Flash 系 256K、Pro 128K，
+  //     实测压缩点 270124 / 278137 / 278569（略超 256K 是 IDE 启发式 tokenizer 的估算漂移）。
+  //   · Claude 4.6 160K / GPT-OSS 120B 80K。
+  //   判系列优先用官方 modelId（GetUserStatus 的 config.modelId），placeholder 只兜底 ——
+  //   官方每次上新模型都会整批重排 M 编号（10 月是 M318，11 月 Gemini 4 变成 M525~M528）。
   var M = {
-    FLASH: 256000,   // Gemini 3.5 ~ 3.8 Flash 全系（平台默认）
-    PRO: 128000,     // Gemini 3.1 Pro / Gemini 3 Flash
-    CLAUDE: 160000,  // Claude Sonnet / Opus 4.6（原生 250K，平台只给 160K）
-    GPT_OSS: 80000,  // GPT-OSS 120B
+    GEMINI4: 1048576, // Gemini 4 全系原生 1M（Carbon / Neon / Hydrogen / Argon）
+    FLASH: 256000,    // Gemini 3.5 ~ 3.8 Flash（平台截断）
+    PRO: 128000,      // Gemini 3.1 Pro / Gemini 3 Flash
+    CLAUDE: 160000,   // Claude Sonnet / Opus 4.6（原生 250K，平台只给 160K）
+    GPT_OSS: 80000,   // GPT-OSS 120B
   };
+
+  // placeholder → 官方 modelId，由 GetUserStatus 动态填充（见 indexModels）
+  var MODEL_IDS = {};
 
   // 兜底映射（真实名称优先从 GetCascadeModelConfigData 动态拿）
   var FALLBACK_LABELS = {
+    MODEL_PLACEHOLDER_M525: 'Gemini 4 Hydrogen (High)',
+    MODEL_PLACEHOLDER_M528: 'Gemini 4 Hydrogen (XHigh)',
+    MODEL_PLACEHOLDER_M526: 'Gemini 4 Hydrogen (Medium)',
+    MODEL_PLACEHOLDER_M527: 'Gemini 4 Hydrogen (Low)',
+    MODEL_PLACEHOLDER_M670: 'Gemini 4 Carbon',
+    MODEL_PLACEHOLDER_M536: 'Gemini 4 Neon',
+    MODEL_PLACEHOLDER_M421: 'Gemini 4 Argon',
     MODEL_PLACEHOLDER_M318: 'Gemini 3.8 Flash (High)',
     MODEL_PLACEHOLDER_M319: 'Gemini 3.8 Flash (Medium)',
     MODEL_PLACEHOLDER_M320: 'Gemini 3.8 Flash (Low)',
@@ -70,34 +83,42 @@
   };
 
   /**
-   * 模型 ID → 平台截断阈值。
+   * 模型 ID → 上下文上限。
    *
    * 口径必须与 lsclient.js 的 guessContextLimit 保持一致，否则同一台机器上
    * 状态栏和悬浮面板会显示两个不同的分母。
-   * placeholder 编号无语义（官方随时新增/重排），所以只对已知编号精确比对，
-   * 其余一律按 Gemini Flash 系（平台默认）算。
+   * placeholder 编号无语义（官方随时新增/重排），所以先用 MODEL_IDS 把它翻译成
+   * 官方 modelId 再判系列；翻译不到才退回编号表。
    */
   function limitOf(model) {
     var raw = String(model || '');
-    var id = raw.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+    var real = MODEL_IDS[raw] || raw;
+    var id = real.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+
+    // 1) Gemini 4 全系：原生 1M
+    if (id.indexOf('gemini-4') >= 0 || id.indexOf('gemini4') >= 0) return M.GEMINI4;
+    // 2) Claude
+    if (id.indexOf('claude') >= 0 || id.indexOf('opus') >= 0
+        || id.indexOf('sonnet') >= 0 || id.indexOf('haiku') >= 0) return M.CLAUDE;
+    // 3) GPT-OSS
+    if (id.indexOf('gpt') >= 0 || id.indexOf('oss') >= 0) return M.GPT_OSS;
+    // 4) Gemini 3.x：Pro 128K，3.5+ Flash 256K
+    if (id.indexOf('gemini') >= 0) {
+      if (id.indexOf('pro') >= 0) return M.PRO;
+      var v = id.match(/gemini-3-(\d+)/);
+      var minor = v ? parseInt(v[1], 10) : NaN;
+      return (!isNaN(minor) && minor >= 5) ? M.FLASH : M.PRO;
+    }
+    // 5) placeholder 离线兜底（2026-11-27 实测的完整模型表）
     var ph = id.match(/model-placeholder-(m\d+)/);
     if (ph) {
-      var n = ph[1];
-      if (n === 'm35' || n === 'm26') return M.CLAUDE;       // Claude Sonnet / Opus 4.6
-      if (n === 'm18' || n === 'm16' || n === 'm36' || n === 'm37') return M.PRO; // Gemini Pro / 3 Flash
-      return M.FLASH;                                        // 其余已知编号都是 Flash 系
+      var n = ph[1].toUpperCase();
+      if (['M421', 'M525', 'M526', 'M527', 'M528', 'M536', 'M670'].indexOf(n) >= 0) return M.GEMINI4;
+      if (n === 'M35' || n === 'M26') return M.CLAUDE;
+      if (n === 'M16' || n === 'M36' || n === 'M18' || n === 'M37') return M.PRO;
+      return M.FLASH;
     }
-    if (id.indexOf('claude') >= 0 || id.indexOf('opus') >= 0
-        || id.indexOf('sonnet') >= 0) return M.CLAUDE;
-    if (id.indexOf('gpt') >= 0 || id.indexOf('oss') >= 0) return M.GPT_OSS;
-    if (id.indexOf('pro') >= 0) return M.PRO;
-    if (id.indexOf('flash') >= 0 || id.indexOf('lite') >= 0) {
-      // 归一化后版本号是 "gemini-3-8-..." 这种形状
-      var vm = id.match(/(\d+)-(\d+)/);
-      var ver = vm ? parseFloat(vm[1] + '.' + vm[2]) : NaN;
-      return (!isNaN(ver) && ver < 3.5) ? M.PRO : M.FLASH;
-    }
-    return M.FLASH; // 平台默认模型就是 3.8 Flash
+    return M.FLASH; // 平台默认模型就是 Flash 系
   }
 
   function nameOf(model) {
@@ -494,6 +515,8 @@
         if (m) LABELS[m] = c.label;
         if (alias) LABELS[alias] = c.label;
       }
+      // 记录 placeholder → 官方 modelId，limitOf 靠它判窗口系列（官方换编号自动跟上）
+      if (m && c.modelId) MODEL_IDS[m] = c.modelId;
     });
   }
 

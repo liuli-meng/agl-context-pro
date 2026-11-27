@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.3.3 — 2026-11-27
+
+### 修复
+
+- **Gemini 4 全系的分母错了：还按 256K 算，实测已经溢出到 148%**。
+  Google 在 2026-10-13 ~ 11-18 分四批放出 Gemini 4 家族（Argon / Carbon / Hydrogen / Neon），
+  10 天后官方把 Antigravity 的模型列表整批换成新代号，**旧模型表全部失效**：
+
+  | 官方 label | placeholder | 旧代码算出的分母 | 实际 |
+  |---|---|---|---|
+  | Gemini 4 Hydrogen (XHigh) | `MODEL_PLACEHOLDER_M528` | 256K | **1M** |
+  | Gemini 4 Carbon / Neon / Argon | `M670` / `M536` / `M421` | 256K | **1M** |
+
+  本机实测（2026-11-27，Antigravity 2.28.1）：`Gemini 4 Hydrogen (XHigh)` 单会话跑到
+  **386,425 tokens 仍未触发压缩** —— 0.3.2 里「平台在 27 万截断」的结论对 Gemini 4 已不成立。
+  后果是同一个会话显示 `379,763 / 256,000 = 148.34%`，进度条溢出、状态点永久红灯。
+
+- **判系列不再靠 placeholder 编号，改用官方 `modelId`**。
+  官方每次上模型都会整批重排 `MODEL_PLACEHOLDER_Mxx`（10 月是 M318，11 月 Gemini 4 变成
+  M525~M528/M536/M670/M421），硬编码编号必然慢半拍。现在 `getUserStatus` 顺手把
+  `modelOrAlias.model → config.modelId` 记进缓存，`guessContextLimit` / `limitOf` 用真名
+  （`gemini-4-hydrogen-xhigh`）判系列，编号表降级为离线兜底。官方再换编号能自动跟上。
+
+- **首次调用偶发「未发现 language_server」**。`listLsProcesses` 的 PowerShell 冷启动
+  超时是 10s，首次加载 CIM/WMI 模块时会被截断成空串，整条发现链直接判「没装 Antigravity」。
+  实测同一进程里第一次 `getUserStatus` 失败、紧接着第二次正常。空结果现会再用 20s 重试一次。
+
+### 测试
+
+- 纯函数 19 条（新增 Gemini 4 全系 1M、placeholder 编号表、`modelId` 翻译优先级、
+  未知兜底与 `panel.js` 对齐）+ E2E 9 条，全绿
+
+### 说明
+
+Gemini 4 的 1M 是**原生窗口全开**，不是把 3.x 的老结论推翻成「平台不限」——
+3.x 的老口径（Flash 256K / Pro 128K）仍然有效，两者在代码里是分开判的。
+若后续实测发现 Gemini 4 也在更低处截断，只需调整 `GEMINI4_WINDOW` 一个常量。
+
 ## 0.3.2 — 2026-10-03
 
 ### 修复
